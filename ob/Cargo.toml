@@ -1,0 +1,6 @@
+[package]
+name = "ob"
+version = "0.99.99"
+edition = "2021"
+
+[dependencies]
