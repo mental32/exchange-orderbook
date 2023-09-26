@@ -1,2 +1,3 @@
 [workspace]
-members = ["ob/", "ex/"]
+resolver = "2"
+members = ["exchange/"]

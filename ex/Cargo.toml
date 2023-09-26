@@ -1,7 +1,0 @@
-[package]
-name = "ex"
-version = "0.99.99"
-edition = "2021"
-
-[dependencies]
-ob = { path = "../ob/" }
