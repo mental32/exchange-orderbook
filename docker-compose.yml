@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  exchange:
+    image: exchange-orderbook:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    networks:
+      - exchange-net
+    environment:
+      - REDIS_HOST=redis # Assuming your exchange service uses this variable
+      - REDIS_PORT=6379
+    depends_on:
+      - redis
+    restart: on-failure # Restart the service if it fails
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379" # Expose Redis ports for debugging
+    networks:
+      - exchange-net
+    volumes:
+      - redis-data:/data
+    restart: always
+
+networks:
+  exchange-net:
+    driver: bridge
+
+volumes:
+  redis-data: # Define a volume for Redis data persistence
