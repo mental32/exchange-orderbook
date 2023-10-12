@@ -11,11 +11,33 @@ services:
     networks:
       - exchange-net
     environment:
-      - REDIS_HOST=redis # Assuming your exchange service uses this variable
+      - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=exchange_db
+      - POSTGRES_USER=exchange_user
+      - POSTGRES_PASSWORD=exchange_password
+      - RUST_LOG=trace
     depends_on:
       - redis
+      - postgres
     restart: on-failure # Restart the service if it fails
+    stop_signal: SIGINT # Stop the service gracefully
+
+  nginx:
+    image: nginx:latest
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./etc/nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./etc/letsencrypt/:/etc/letsencrypt:ro
+    networks:
+      - exchange-net
+    depends_on:
+      - exchange
+    restart: always
 
   redis:
     image: redis:latest
@@ -27,9 +49,24 @@ services:
       - redis-data:/data
     restart: always
 
+  postgres:
+    image: postgres:latest
+    ports:
+      - "5432:5432"
+    networks:
+      - exchange-net
+    environment:
+      - POSTGRES_DB=exchange_db
+      - POSTGRES_USER=exchange_user
+      - POSTGRES_PASSWORD=exchange_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: always
+
 networks:
   exchange-net:
     driver: bridge
 
 volumes:
-  redis-data: # Define a volume for Redis data persistence
+  redis-data:
+  postgres-data:
