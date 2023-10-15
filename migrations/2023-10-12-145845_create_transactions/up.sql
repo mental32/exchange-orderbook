@@ -1,4 +1,4 @@
-CREATE TABLE transactions (
+CREATE TABLE IF NOT EXISTS transactions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     buyer_order_id UUID NOT NULL REFERENCES orders(id),
     seller_order_id UUID NOT NULL REFERENCES orders(id),
