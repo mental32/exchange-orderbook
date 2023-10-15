@@ -1,5 +1,5 @@
-CREATE TYPE tx_status AS ENUM ('CREATED', 'PENDING', 'COMPLETED', 'FAILED');
-CREATE TABLE deposits (
+CREATE TYPE IF NOT EXISTS tx_status AS ENUM ('CREATED', 'PENDING', 'COMPLETED', 'FAILED');
+CREATE TABLE IF NOT EXISTS deposits (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id),
     currency_id INT NOT NULL REFERENCES currencies(id),
@@ -8,7 +8,7 @@ CREATE TABLE deposits (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE TABLE withdrawals (
+CREATE TABLE IF NOT EXISTS withdrawals (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id),
     currency_id INT NOT NULL REFERENCES currencies(id),
