@@ -1,10 +1,10 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let body = async {
         tracing_subscriber::fmt::init();
-
-        let config = exchange::config::Config::load_from_env();
-
-        exchange::web::serve(config.webserver_address(), ()).await
+        let config = exchange::Config::load_from_env();
+        exchange::start_fullstack(config, exchange::signal::from_host_os())
+            .await
+            .map_err(|err| Box::new(err) as Box<_>)
     };
 
     return tokio::runtime::Builder::new_current_thread()
