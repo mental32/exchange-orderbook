@@ -52,6 +52,28 @@ pub fn start_fullstack(
     config: config::Config,
     signals: signal::Signals,
 ) -> impl Future<Output = Result<(), StartFullstackError>> {
+    /// create a future that, depending on the build profile, will either:
+    ///
+    /// - wait for 1 hour and then resolve
+    /// - never resolve
+    ///
+    /// This has no business purpose, I just have a habit of forgetting to stop
+    /// exchange when I'm done developing and I don't want to leave it running
+    /// overnight on my laptop.
+    ///
+    fn automatic_shutdown() -> impl std::future::Future<Output = ()> {
+        #[cfg(debug_assertions)]
+        return {
+            const AUTOMATIC_SHUTDOWN_AFTER_DUR: std::time::Duration =
+                std::time::Duration::from_secs(3600); // 1 hour
+
+            tokio::time::sleep(AUTOMATIC_SHUTDOWN_AFTER_DUR)
+        };
+
+        #[cfg(not(debug_assertions))]
+        return std::future::pending();
+    }
+
     let redis = redis::Client::open(config.redis_url()).expect("Failed to open redis client");
 
     async move {
@@ -80,6 +102,10 @@ pub fn start_fullstack(
 
         let res = tokio::select! {
             res = web::serve(config.webserver_address(), state) => res.map_err(StartFullstackError::Webserver),
+            _ = automatic_shutdown() => {
+                tracing::info!("auto-shutdown");
+                Ok(())
+            },
             _ = signals.ctrl_c() => {
                 tracing::info!("SIGINT received");
                 Err(StartFullstackError::Interrupted)
