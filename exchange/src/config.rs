@@ -10,10 +10,12 @@ const WEBSERVER_ADDRESS_DEFAULT: SocketAddr = SocketAddr::V4(SocketAddrV4::new(
 ));
 
 const REDIS_HOST: &str = "REDIS_HOST";
-const REDIS_HOST_DEFAULT: &str = "redis";
+const REDIS_HOST_DEFAULT: &str = "127.0.0.1";
 
 const REDIS_PORT: &str = "REDIS_PORT";
 const REDIS_PORT_DEFAULT: u16 = 6379;
+
+const DATABASE_URL: &str = "DATABASE_URL";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -21,6 +23,7 @@ pub struct Config {
     redis_url: String,
     redis_host: String,
     redis_port: u16,
+    database_url: String,
 }
 
 impl Config {
@@ -54,6 +57,8 @@ impl Config {
             })
             .unwrap_or(REDIS_PORT_DEFAULT);
 
+        let database_url = std::env::var(DATABASE_URL).expect("DATABASE_URL env var is required");
+
         let redis_url = format!("redis://{}:{}", redis_host, redis_port);
 
         Config {
@@ -61,6 +66,7 @@ impl Config {
             redis_url,
             redis_host,
             redis_port,
+            database_url,
         }
     }
 
@@ -78,5 +84,9 @@ impl Config {
 
     pub fn redis_port(&self) -> u16 {
         self.redis_port
+    }
+
+    pub(crate) fn database_url(&self) -> String {
+        self.database_url.clone()
     }
 }
