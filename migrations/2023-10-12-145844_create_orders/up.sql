@@ -1,5 +1,5 @@
-CREATE TYPE IF NOT EXISTS order_type AS ENUM ('BUY', 'SELL');
-CREATE TYPE IF NOT EXISTS order_status AS ENUM ('OPEN', 'CLOSED', 'CANCELLED');
+CREATE TYPE order_type AS ENUM ('BUY', 'SELL');
+CREATE TYPE order_status AS ENUM ('OPEN', 'CLOSED', 'CANCELLED');
 CREATE TABLE IF NOT EXISTS orders (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id),
