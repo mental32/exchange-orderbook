@@ -58,7 +58,7 @@ pub fn trade_routes(state: InternalApiState) -> Router {
         .route("/trade/:asset/order", trade_order)
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            middleware::internal_api_authentication_check,
+            middleware::validate_session_token_redis,
         ))
         .with_state(state)
 }

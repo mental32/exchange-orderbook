@@ -1,25 +1,77 @@
+use std::str::FromStr;
+
 use axum::extract::State;
-use axum::http::{status, Request};
+use axum::headers::{Cookie, HeaderMapExt};
+use axum::http::{Request, StatusCode};
 use axum::middleware::Next;
-use axum::response::{IntoResponse, Response};
+
+use axum::response::IntoResponse;
 use redis::AsyncCommands;
 
 use crate::web::InternalApiState;
 
-pub async fn internal_api_authentication_check<B>(
+/// A verified user ID from a session token
+#[derive(Debug, Clone)]
+pub struct UserId(uuid::Uuid);
+
+/// Check if the request has a session-token cookie which is a
+/// 32-byte hex string that should be a key in Redis with the format
+/// session:{session-token} and the value should be the user ID (UUID)
+pub async fn validate_session_token_redis<B>(
     State(state): State<InternalApiState>,
-    request: Request<B>,
+    mut request: Request<B>,
     next: Next<B>,
-) -> Response {
-    let mut conn = match state.redis.get_multiplexed_tokio_connection().await {
+) -> axum::response::Response {
+    // Attempt to get a Redis connection from the pool
+    let mut conn = match state.redis.get_async_connection().await {
         Ok(conn) => conn,
-        Err(err) => {
-            tracing::error!(?err, "failed to get redis connection");
-            return status::StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
         }
     };
 
-    let map: std::collections::HashMap<String, ()> = conn.hgetall(b"").await.unwrap();
+    // Extract the session-token cookie from the request headers
+    let session_token = match request.headers().typed_get::<Cookie>() {
+        Some(cookies) => match cookies.get("session-token") {
+            Some(token) => token.to_owned(),
+            None => {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    "Unauthorized: session-token cookie missing",
+                )
+                    .into_response();
+            }
+        },
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                "Unauthorized: session-token cookie missing",
+            )
+                .into_response();
+        }
+    };
 
-    next.run(request).await
+    // Query Redis to validate the session token
+    let redis_key = format!("session:{}", session_token);
+    let user_id = conn
+        .get(&redis_key)
+        .await
+        .unwrap_or(None)
+        .map(|st: String| uuid::Uuid::from_str(&st));
+
+    match user_id {
+        Some(Ok(uuid)) => {
+            // Session token is valid; proceed to the next middleware or handler
+            request.extensions_mut().insert(UserId(uuid));
+            next.run(request).await
+        }
+        None | Some(Err(_)) => {
+            // Session token is invalid; return an unauthorized error
+            (
+                StatusCode::UNAUTHORIZED,
+                "Unauthorized: invalid session token",
+            )
+                .into_response()
+        }
+    }
 }
