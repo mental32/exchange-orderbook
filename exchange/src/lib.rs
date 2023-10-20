@@ -1,10 +1,12 @@
 use std::{collections::HashMap, future::Future, sync::Arc};
 
-use sqlx::error;
 use thiserror::Error;
 
 pub mod config;
 pub use config::Config;
+
+pub mod asset;
+pub use asset::Asset;
 
 pub mod signal;
 pub mod trading;
@@ -28,7 +30,7 @@ impl Exchange {
 
     async fn place_order(
         &self,
-        asset: web::Asset,
+        asset: Asset,
         order_type: crate::trading::OrderType,
         stp: crate::trading::SelfTradeProtection,
         side: crate::trading::OrderSide,
@@ -82,22 +84,18 @@ pub fn start_fullstack(
             .connect(&config.database_url())
             .await?;
 
+        let (te_tx, rx) = tokio::sync::mpsc::channel(1024);
+        let te_input = trading::engine::TradingEngineLoopInput::new(rx);
+        let te_handle = std::thread::spawn(move || {
+            trading::engine::trading_engine_loop(te_input);
+        });
+
+        let assets = Arc::new(HashMap::from_iter(asset::internal_asset_list()));
         let state = web::InternalApiState {
             exchange: Exchange::new(),
             redis,
             db_pool,
-            assets: Arc::new({
-                let mut map: HashMap<web::asset::InternalAssetKey, web::Asset> = HashMap::new();
-                map.insert("BTC".into(), web::Asset::Bitcoin);
-                map.insert("btc".into(), web::Asset::Bitcoin);
-                map.insert(web::Asset::Bitcoin.into(), web::Asset::Bitcoin);
-
-                map.insert("ETH".into(), web::Asset::Ether);
-                map.insert("eth".into(), web::Asset::Ether);
-                map.insert(web::Asset::Ether.into(), web::Asset::Ether);
-
-                map
-            }),
+            assets,
         };
 
         let res = tokio::select! {
@@ -116,6 +114,9 @@ pub fn start_fullstack(
         tracing::info!("shutting down gracefully");
 
         // TODO: shutdown gracefully
+        te_handle
+            .join()
+            .expect("Failed to join trading engine thread");
 
         res
     }

@@ -23,3 +23,18 @@ pub enum Asset {
     Bitcoin,
     Ether,
 }
+
+pub(crate) fn internal_asset_list() -> impl Iterator<Item = (InternalAssetKey, Asset)> {
+    use Asset as A;
+    use InternalAssetKey as K;
+
+    [
+        (K::from(A::Bitcoin), A::Bitcoin),
+        (K::from("btc"), A::Bitcoin),
+        (K::from("BTC"), A::Bitcoin),
+        (K::from(A::Ether), A::Ether),
+        (K::from("eth"), A::Ether),
+        (K::from("ETH"), A::Ether),
+    ]
+    .into_iter()
+}

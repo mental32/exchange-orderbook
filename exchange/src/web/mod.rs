@@ -16,9 +16,6 @@ use crate::Exchange;
 
 mod middleware;
 
-pub mod asset;
-pub use asset::Asset;
-
 mod trade_add_order;
 mod trade_cancel_order;
 mod trade_edit_order;
@@ -37,7 +34,7 @@ pub type Error = axum::Error;
 pub struct InternalApiState {
     pub(crate) exchange: Exchange,
     pub(crate) redis: redis::Client,
-    pub(crate) assets: Arc<HashMap<asset::InternalAssetKey, Asset>>,
+    pub(crate) assets: Arc<HashMap<crate::asset::InternalAssetKey, crate::Asset>>,
     pub(crate) db_pool: sqlx::PgPool,
 }
 
