@@ -35,18 +35,18 @@ pub struct Orderbook {
 }
 
 pub struct MultiplePriceLevels {
-    inner: Vec<PriceLevel>,
+    inner: Vec<PriceLevel>, // NB: we use TinyVec here
 }
 
 pub struct PriceLevel {
-    price: u32,
+    price: NonZeroU32,
     memo_seq: u32,
-    inner: Vec<Order>,
+    inner: Vec<Order>, // NB: we also use TinyVec here
 }
 ```
 
 - `MultiplePriceLevels`: A vector that holds price levels.
-- `PriceLevel`: Contains the price, a sequence number generator, and the orders for that price level.
+- `PriceLevel`: Contains the price, a memo number generator, and the orders for that price level.
 
 An order-index type is employed for finding an order. The respective price level is located using binary search, while the order within that level is found via a linear scan.
 
@@ -60,7 +60,10 @@ pub struct OrderIndex {
 ```
 
 The design aims to minimize the cost of pointer indirection by opting for
-linear scans when accessing orders.
+linear scans when accessing orders. also we use [tinyvec]
+for the inner vectors because I am a big degenerate fan of premature
+optimization and the excuse I am going to use is that this improves cache
+locality and avoids premature heap allocations.
 
 A contiguous array storage could theoretically improve cache hits but then we have
 to care about the memory management of the array.
@@ -71,3 +74,5 @@ how to efficiently search for orders in this setup. This is a lot of complexity
 for a small gain, so we opt for the simpler design.
 
 mentalfoss@gmail.com
+
+[tinyvec]: https://docs.rs/tinyvec
