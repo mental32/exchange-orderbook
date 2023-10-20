@@ -2,7 +2,9 @@
 
 # Abstract
 
-exchange-orderbook is an implementation of a cryptocurrency exchange, like Coinbase, Kraken, or Binance. It is written in Rust, uses the Axum web framework, and is backed by a Postgres database.
+exchange-orderbook is an implementation of a spot exchange; like Coinbase, Kraken, or Binance supporting Bitcoin (BTC) and Ether (ETH) (NB: crypto is just an implementation detail here so dont get hung up on it you can replace it with any other asset.)
+
+Written in Rust, using the Axum web framework, and backed by Postgres.
 
 # Service Architecture
 
@@ -13,51 +15,59 @@ The following services can be found in the `docker-compose.yml` file:
 * Redis, used as a caching layer and as a message broker between exchange replicas
 * Postgres, Schema migrations are located in the migrations directory and are managed using the diesel migrate tool. To minimize operational risk—such as system downtime, data loss, or state incoherence between replicas—migrations are executed manually.
 
-# Low-Level Details: Orderbook
+# Database
 
-The orderbook stores orders in one of two vectors, bids or asks. Each vector
-contains price levels, which are sorted in ascending order (lowest to highest).
-each price level contains a list of orders, which are internally unsorted and
-thus sorted in the order they were received.
+The database is a Postgres database. Schema migrations are located in the migrations directory and are managed using the diesel migrate tool. To minimize operational risk—such as system downtime, data loss, or state incoherence between replicas—migrations are executed manually.
 
-```rust
+
+# Low-Level Notes
+
+## Orderbook
+
+The Orderbook is a key component that leaves room for interpretation when it comes to implementation. Here our orderbook type is very simple: It contains two vectors: `bids` and `asks`, which hold price levels sorted in ascending order. Each price level itself houses a not-explicitly-sorted (read: orders at an index with a lower value than those of a higher index came earlier as .push adds to the right hand side) list of orders.
+
+Here is some code to illustrate the design:
+
+```rs
 pub struct Orderbook {
     bids: MultiplePriceLevels,
     asks: MultiplePriceLevels,
 }
 
-/// The threshold at which the [`MultiplePriceLevels`] will switch from using array storage to heap storage.
-pub const MULTIPLE_PRICE_LEVEL_INNER_CAPACITY: usize = 128;
-
-/// Stores multiple price levels in a contiguous vector.
 pub struct MultiplePriceLevels {
-    inner: TinyVec<[PriceLevel; MULTIPLE_PRICE_LEVEL_INNER_CAPACITY]>,
+    inner: Vec<PriceLevel>,
 }
 
-
-/// The threshold at which the [`PriceLevel`] will switch from using array storage to heap storage.
-const PRICE_LEVEL_INNER_CAPACITY: usize = 64;
-
-/// The inner data structure for a [`MultiplePriceLevels`].
 pub struct PriceLevel {
-    /// The price of the orders in this price level.
     price: u32,
-    /// The sequence number generator for the next order to be added to this price level.
     memo_seq: u32,
-    /// The inner data structure storing the orders in this price level.
-    inner: TinyVec<[Order; PRICE_LEVEL_INNER_CAPACITY]>,
+    inner: Vec<Order>,
 }
 ```
 
-Accessing an order in the book is done with an order-index type. The price-level is resolved using a binary search, and the order is resolved using a linear scan. This approach was chosen as a cost-benefit tradeoff between the cost of pointer-indirection and the cost of overhead to maintain an appropriate data structure.
+- `MultiplePriceLevels`: A vector that holds price levels.
+- `PriceLevel`: Contains the price, a sequence number generator, and the orders for that price level.
 
-We care about the cost of pointer-indirection
-so ideally we would store the orders in a contiguous array. However; we would have to design a storage solution that avoids reallocation keeping orders in the same memory location and the index valid, the overhead to maintain this is not worth the performance gain. Additionally, we would have to pay a cost of continually memory copying ranges of the vector when reallocating when inserting orders midway into the structure.
+An order-index type is employed for finding an order. The respective price level is located using binary search, while the order within that level is found via a linear scan.
 
-The above notes are super cool to implement for a high-performance book that optimizes for cache hits and compactness, but for this project, we are not concerned with that. We are concerned with correctness and simplicity. The approach chosen is simple and correct.
+```rs
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OrderIndex {
+    side: OrderSide,  // bid (buy) or ask (sell)
+    price: NonZeroU32,  // price level (non-zero)
+    memo: u32, // some unique identifier for the order (e.g. monotonically increasing sequence number)
+}
+```
 
-# Database
+The design aims to minimize the cost of pointer indirection by opting for
+linear scans when accessing orders.
 
-The database is a Postgres database. Schema migrations are located in the migrations directory and are managed using the diesel migrate tool. To minimize operational risk—such as system downtime, data loss, or state incoherence between replicas—migrations are executed manually.
+A contiguous array storage could theoretically improve cache hits but then we have
+to care about the memory management of the array.
+if we want to avoid reallocations e.g. by re-using cells in the array that
+are no longer in use then we need to keep track of which cells are in use and
+which are not (for example with a tombstone bit.) and dont get me started on
+how to efficiently search for orders in this setup. This is a lot of complexity
+for a small gain, so we opt for the simpler design.
 
 mentalfoss@gmail.com
