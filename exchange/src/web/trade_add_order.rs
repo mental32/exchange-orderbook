@@ -1,11 +1,10 @@
-use axum::{
-    extract::{Json, Path, State},
-    response::{IntoResponse, Response},
-};
+use axum::extract::{Json, Path, State};
+use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
-use super::{Asset, InternalApiState};
+use super::InternalApiState;
 use crate::trading::{OrderSide, OrderType, SelfTradeProtection};
+use crate::Asset;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeAddOrder {
@@ -27,7 +26,7 @@ pub async fn trade_add_order(
 ) -> Response {
     if !state
         .assets
-        .contains_key(&super::asset::InternalAssetKey::ByValue(asset))
+        .contains_key(&crate::asset::InternalAssetKey::ByValue(asset))
     {
         tracing::warn!(?asset, "asset not enabled");
         return (axum::http::StatusCode::NOT_FOUND, "asset not enabled").into_response();
