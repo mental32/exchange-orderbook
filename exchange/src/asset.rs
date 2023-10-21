@@ -1,32 +1,34 @@
 use serde::{Deserialize, Serialize};
 
+/// useful as a key in a map-like structure for when there are multiple ways to key an asset
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum InternalAssetKey {
+pub enum AssetKey {
     Static(&'static str),
     ByValue(Asset),
 }
 
-impl From<Asset> for InternalAssetKey {
+impl From<Asset> for AssetKey {
     fn from(asset: Asset) -> Self {
-        InternalAssetKey::ByValue(asset)
+        AssetKey::ByValue(asset)
     }
 }
 
-impl From<&'static str> for InternalAssetKey {
+impl From<&'static str> for AssetKey {
     fn from(asset: &'static str) -> Self {
-        InternalAssetKey::Static(asset)
+        AssetKey::Static(asset)
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+/// An asset that can be traded on the exchange
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Asset {
     Bitcoin,
     Ether,
 }
 
-pub(crate) fn internal_asset_list() -> impl Iterator<Item = (InternalAssetKey, Asset)> {
+pub(crate) fn internal_asset_list() -> impl Iterator<Item = (AssetKey, Asset)> {
     use Asset as A;
-    use InternalAssetKey as K;
+    use AssetKey as K;
 
     [
         (K::from(A::Bitcoin), A::Bitcoin),

@@ -1,43 +1,22 @@
-use std::{collections::HashMap, future::Future, sync::Arc};
+#![cfg_attr(debug_assertions, allow(warnings))]
+
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::Arc;
 
 use thiserror::Error;
+use tokio::sync::mpsc;
 
 pub mod config;
 pub use config::Config;
-
 pub mod asset;
 pub use asset::Asset;
-
 pub mod signal;
 pub mod trading;
 pub mod web;
 
-#[derive(Debug)]
-struct Inner {}
-
-#[derive(Debug, Clone)]
-pub struct Exchange {
-    /// Read-only data or data that has interior mutability.
-    inner_ro: Arc<Inner>,
-}
-
-impl Exchange {
-    pub fn new() -> Self {
-        Self {
-            inner_ro: Arc::new(Inner {}),
-        }
-    }
-
-    async fn place_order(
-        &self,
-        asset: Asset,
-        order_type: crate::trading::OrderType,
-        stp: crate::trading::SelfTradeProtection,
-        side: crate::trading::OrderSide,
-    ) {
-        todo!()
-    }
-}
+pub(crate) mod app_cx;
+pub(crate) use app_cx::AppCx;
 
 #[derive(Debug, Error)]
 pub enum StartFullstackError {
@@ -56,10 +35,10 @@ pub fn start_fullstack(
 ) -> impl Future<Output = Result<(), StartFullstackError>> {
     /// create a future that, depending on the build profile, will either:
     ///
-    /// - wait for 1 hour and then resolve
-    /// - never resolve
+    /// - wait for 1 hour and then resolve (debug)
+    /// - never resolve (release)
     ///
-    /// This has no business purpose, I just have a habit of forgetting to stop
+    /// This has no real purpose, I just have a habit of forgetting to stop
     /// exchange when I'm done developing and I don't want to leave it running
     /// overnight on my laptop.
     ///
@@ -84,15 +63,15 @@ pub fn start_fullstack(
             .connect(&config.database_url())
             .await?;
 
-        let (te_tx, rx) = tokio::sync::mpsc::channel(1024);
-        let te_input = trading::engine::TradingEngineLoopInput::new(rx);
-        let te_handle = std::thread::spawn(move || {
-            trading::engine::trading_engine_loop(te_input);
-        });
+        let te_msg_chan_cap = option_env!("TE_CHANNEL_CAPACITY")
+            .map(|st| st.parse().ok())
+            .flatten()
+            .unwrap_or(1024);
+        let (te_tx, te_handle) = trading::spawn_trading_engine(te_msg_chan_cap);
 
         let assets = Arc::new(HashMap::from_iter(asset::internal_asset_list()));
         let state = web::InternalApiState {
-            exchange: Exchange::new(),
+            app_cx: AppCx::new(te_tx),
             redis,
             db_pool,
             assets,
@@ -101,7 +80,7 @@ pub fn start_fullstack(
         let res = tokio::select! {
             res = web::serve(config.webserver_address(), state) => res.map_err(StartFullstackError::Webserver),
             _ = automatic_shutdown() => {
-                tracing::info!("auto-shutdown");
+                tracing::info!("auto-shutdown triggered");
                 Ok(())
             },
             _ = signals.ctrl_c() => {
