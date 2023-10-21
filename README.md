@@ -19,8 +19,74 @@ The following services can be found in the `docker-compose.yml` file:
 
 The database is a Postgres database. Schema migrations are located in the migrations directory and are managed using the diesel migrate tool. To minimize operational risk—such as system downtime, data loss, or state incoherence between replicas—migrations are executed manually.
 
-
 # Low-Level Notes
+
+## Trading Engine
+
+The term "trading engine" is a little ambiguous so to break it down, a trading engine is simply an abstraction around a
+matching engine and the owner responsible for mutation of the orderbooks (books) that also can perform checks for risk
+analysis depending on, of course, how complex the underlying instrument is
+
+The trading engine's (TE) call graph is, assuming you have lots of users, _the_ hot path of the entire exchange
+operation. It is also crack cocaine for engineers who love optimization challenges because in financial markets
+a microsecond can be an eternity so time is literally money which makes latency is the most important factor
+after correctness.
+
+The state of the orderbook must be coherent always since it can represent an eye watering amount of money in the system
+consequently whatever manages the mutation of the orderbook must be correct and capable of unwinding or never commiting
+change that causes a loss of coherency in the books.
+
+But specifically in this code the TE is:
+
+1. Responsible for managing orders into the system after ingress.
+2. Resolving incoming orders against the resting orders across all the books and
+3. Executing triggers to cause external updates, e.g. writes to the database to commit results of an operation, notify users of fills
+
+The design is reminicent of the actor in an actor model of concurrency. Messages are sent over a bounded channel and
+are then processed by the TE event loop which is running on separate thread. the structure of the event loop is:
+
+```rs
+loop {
+    let message = tokio::sync::mpsc::Receiver::blocking_recv();
+
+    match message {
+        // switch on a message
+        // - rewind, suspend, resume, shutdown
+        // - place-order, cancel-order, amend-order
+    }
+
+    // execute an appropriate trigger
+    // boils down to a function call to send a message back to the main task to perform some side effects
+}
+```
+
+The TE performs no side-effects, everthing happens by receiving and sending messages to the state machine running in
+a separate thread. there is no internal randomness in the system and its output is totally deterministic given the input
+is streamed in at the same order and integrity as it was initially.
+
+This makes it a fantastic candidate for [event sourcing.]
+
+<!-- TE perfoming "no side effects" is not strictly true in a Haskell sense as it does mutate memory in-place
+but this is very reasonable design choice to excuse away -->
+
+### Time Travel
+
+The coolest thing about the design of the TE is what I like to call "time travel".
+
+For example. consider there might be some bug in the trading engine logic that is dicovered by some business message
+like place-order or amend-order causing the engine to panic and explode. obviously this is a problem since no matter
+which replica processes the message it will always deterministically crash the TE. This is not good.
+
+But assuming we have the ability (spoiler alert: "we do.") to:
+
+1. Detect when the TE thread panics and crashes
+2. Design the TE so that:
+    - we can determine, for any input, what the inverse operations are
+    - run the inverse operations effectively an "undo" operation continously until we reach a state that we had at a
+      previous point in time.
+
+All we need is a frankly small amount of code to recover from bad inputs or environmental failures requiring us to
+abort processing the input entirely, a success story for reproducability and fault tolerance!
 
 ## Orderbook
 
@@ -76,3 +142,4 @@ for a small gain, so we opt for the simpler design.
 mentalfoss@gmail.com
 
 [tinyvec]: https://docs.rs/tinyvec
+[event sourcing]: https://microservices.io/patterns/data/event-sourcing.html
