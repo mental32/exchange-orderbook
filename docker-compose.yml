@@ -59,6 +59,7 @@ services:
       - POSTGRES_DB=exchange_db
       - POSTGRES_USER=exchange_user
       - POSTGRES_PASSWORD=exchange_password
+      - TZ=UTC
     volumes:
       - postgres-data:/var/lib/postgresql/data
     restart: always
