@@ -1,7 +1,8 @@
 use std::str::FromStr;
 
 use axum::extract::State;
-use axum::headers::{Cookie, HeaderMapExt};
+use axum::headers::authorization::Bearer;
+use axum::headers::{Authorization, Cookie, HeaderMapExt};
 use axum::http::{Request, StatusCode};
 use axum::middleware::Next;
 
@@ -31,17 +32,8 @@ pub async fn validate_session_token_redis<B>(
     };
 
     // Extract the session-token cookie from the request headers
-    let session_token = match request.headers().typed_get::<Cookie>() {
-        Some(cookies) => match cookies.get("session-token") {
-            Some(token) => token.to_owned(),
-            None => {
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    "Unauthorized: session-token cookie missing",
-                )
-                    .into_response();
-            }
-        },
+    let session_token = match request.headers().typed_get::<Authorization<Bearer>>() {
+        Some(auth) => auth.0.token().to_string(),
         None => {
             return (
                 StatusCode::UNAUTHORIZED,
