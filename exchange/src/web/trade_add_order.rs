@@ -21,12 +21,21 @@ pub struct TradeAddOrderResponse {}
 /// Place an order for `asset`
 pub async fn trade_add_order(
     State(state): State<InternalApiState>,
-    Path(asset): Path<Asset>,
+    Path(asset): Path<String>,
     Json(trade_add_order_body): Json<TradeAddOrder>,
 ) -> Response {
+    let asset = match asset.as_str() {
+        "btc" | "BTC" => Asset::Bitcoin,
+        "eth" | "ETH" => Asset::Ether,
+        _ => {
+            tracing::warn!(?asset, "invalid asset");
+            return (axum::http::StatusCode::NOT_FOUND, "invalid asset").into_response();
+        }
+    };
+
     if !state
         .assets
-        .contains_key(&crate::asset::InternalAssetKey::ByValue(asset))
+        .contains_key(&crate::asset::AssetKey::ByValue(asset))
     {
         tracing::warn!(?asset, "asset not enabled");
         return (axum::http::StatusCode::NOT_FOUND, "asset not enabled").into_response();
@@ -42,10 +51,7 @@ pub async fn trade_add_order(
         // iceberg_order,
     } = trade_add_order_body;
 
-    state
-        .exchange
-        .place_order(asset, order_type, stp, side)
-        .await;
+    state.app_cx.place_order(asset, order_type, stp, side).await;
 
     Json(TradeAddOrderResponse {}).into_response()
 }
