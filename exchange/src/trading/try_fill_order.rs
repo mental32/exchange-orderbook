@@ -1,3 +1,5 @@
+use std::convert::Infallible;
+
 use super::*;
 
 #[derive(Debug, thiserror::Error)]
@@ -9,16 +11,12 @@ pub enum TryFillOrdersError {}
 /// of the fill operation. This allows you to review the potential outcome before committing
 /// to modifying the order book.
 ///
-/// # Errors
-///
-/// Returns a `TryFillOrdersError` when the taker's order has a zero quantity.
-///
 pub fn try_fill_orders<'a>(
     orderbook: &'a mut Orderbook,
     taker: Order,
     taker_side: OrderSide,
     order_type: OrderType,
-) -> Result<PendingFill<'a>, TryFillOrdersError> {
+) -> Result<PendingFill<'a>, Infallible> {
     let mut maker_fills = vec![];
     let mut taker_fill_outcome = FillType::None;
 
