@@ -76,10 +76,10 @@ impl<'a> PendingFill<'a> {
     }
 
     /// Execute the pending fill operation.
-    pub fn commit(self) -> Result<(), ExecutePendingFillError> {
-        let mut taker_order_quantity = self.taker.quantity.get();
+    pub fn commit(self) -> Result<(FillType, Option<Order>), ExecutePendingFillError> {
+        let mut taker_order_remaining_quantity = self.taker.quantity.get();
 
-        for (oix, order, fill_type) in self.maker_fills {
+        for (oix, order, fill_type) in dbg!(self.maker_fills) {
             match fill_type {
                 // complete fill for a maker order.
                 FillType::Complete => {
@@ -89,7 +89,7 @@ impl<'a> PendingFill<'a> {
                         .ok_or(ExecutePendingFillError::InvalidOrderIndex(oix))?;
                     assert_eq!(maker_order, order);
                     // if this also filled the taker order, then we wont loop again.
-                    taker_order_quantity -= maker_order.quantity.get();
+                    taker_order_remaining_quantity -= maker_order.quantity.get();
                 }
                 // partial fill for a maker order also means a complete fill for the taker order.
                 FillType::Partial => {
@@ -98,15 +98,32 @@ impl<'a> PendingFill<'a> {
                         .get_mut(oix)
                         .ok_or(ExecutePendingFillError::InvalidOrderIndex(oix))?;
                     assert_eq!(*maker_order, order);
-                    assert!(taker_order_quantity < maker_order.quantity.get());
+                    assert!(taker_order_remaining_quantity < maker_order.quantity.get());
                     maker_order.quantity =
-                    NonZeroU32::new(maker_order.quantity.get() - taker_order_quantity).expect("partial fills of maker orders will always have a quantity greater than zero");
-                    taker_order_quantity = 0;
+                    NonZeroU32::new(maker_order.quantity.get() - taker_order_remaining_quantity).expect("partial fills of maker orders will always have a quantity greater than zero");
+                    taker_order_remaining_quantity = 0;
                 }
                 FillType::None => unreachable!(),
             }
         }
-        assert_eq!(taker_order_quantity, 0);
-        Ok(())
+
+        match self.taker_fill_outcome {
+            FillType::Complete => assert_eq!(taker_order_remaining_quantity, 0),
+            FillType::Partial => {
+                assert!(self.taker.quantity.get() > taker_order_remaining_quantity)
+            }
+            FillType::None => assert_eq!(taker_order_remaining_quantity, self.taker.quantity.get()),
+        }
+
+        let taker_order = if let Some(quantity) = NonZeroU32::new(taker_order_remaining_quantity) {
+            let mut taker_order = self.taker;
+            taker_order.quantity = quantity;
+            Some(taker_order)
+        } else {
+            // the taker order was completely filled.
+            None
+        };
+
+        Ok((self.taker_fill_outcome, taker_order))
     }
 }
