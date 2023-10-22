@@ -7,6 +7,7 @@ edition = "2021"
 ahash = "0.8.3"
 argon2 = { version = "0.5.2", features = ["alloc"] }
 email_address = "0.2.4"
+futures = "0.3.28"
 hex = "0.4"
 mime = "0.3.17"
 rand = "0.8.5"
@@ -35,6 +36,7 @@ features = [
     "runtime-tokio",
     "macros",
     "uuid",
+    "json",
 ]
 
 [dependencies.redis]
