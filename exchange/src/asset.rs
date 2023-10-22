@@ -20,7 +20,7 @@ impl From<&'static str> for AssetKey {
 }
 
 /// An asset that can be traded on the exchange
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 pub enum Asset {
     Bitcoin,
     Ether,

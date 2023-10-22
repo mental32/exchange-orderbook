@@ -8,7 +8,7 @@
 //!
 use std::sync::Arc;
 
-use crate::trading::engine::TradingEngineTx;
+use crate::trading::TradingEngineTx;
 
 use super::*;
 
