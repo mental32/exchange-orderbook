@@ -1,0 +1,9 @@
+DROP TABLE deposits CASCADE;
+DROP TABLE withdrawals CASCADE;
+DROP TABLE orders_event_source CASCADE;
+DROP TABLE currencies CASCADE;
+DROP TABLE wallets CASCADE;
+DROP TABLE users CASCADE;
+
+DROP TYPE tx_status CASCADE;
+DROP TYPE currency_status CASCADE;
