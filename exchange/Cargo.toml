@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 ahash = "0.8.3"
 argon2 = { version = "0.5.2", features = ["alloc"] }
+dotenv = "0.15.0"
 email_address = "0.2.4"
 futures = "0.3.28"
 hex = "0.4"

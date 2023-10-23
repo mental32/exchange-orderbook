@@ -49,13 +49,8 @@ impl SpawnTradingEngine {
 
         // stream out rows from the orders_event_source table, deserialize them into TradeCmds
         // and send them to the trading engine for processing.
-        let mut stream = sqlx::query!(
-            r#"
-            SELECT id, jstr FROM orders_event_source
-            ORDER BY id ASC
-            "#,
-        )
-        .fetch(&db_pool);
+        let mut stream =
+            sqlx::query!(r#"SELECT id, jstr FROM orders_event_source"#,).fetch(&db_pool);
 
         while let Some(row) = stream.next().await {
             let row = row?;
