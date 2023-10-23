@@ -1,7 +1,4 @@
-#![cfg_attr(debug_assertions, allow(warnings))]
-
 use std::collections::HashMap;
-use std::convert::Infallible;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -91,6 +88,8 @@ async fn spawn_trading_engine(config: &Config) -> SpawnTradingEngine {
                 T::Trade(cmd) => trading::trading_engine_step(cmd, &mut assets),
             }
         }
+
+        tracing::warn!("trading engine supervisor finished");
     }
 
     let (input, output) = mpsc::channel(1024);
@@ -129,6 +128,11 @@ pub fn start_fullstack(
     let redis = redis::Client::open(config.redis_url()).expect("Failed to open redis client");
 
     async move {
+        tracing::debug!(
+            config = toml::to_string(&config).ok(),
+            "starting exchange in fullstack mode"
+        );
+
         let db_pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(20)
             .connect(&config.database_url())
@@ -143,7 +147,7 @@ pub fn start_fullstack(
 
         let assets = Arc::new(HashMap::from_iter(asset::internal_asset_list()));
         let state = web::InternalApiState {
-            app_cx: AppCx::new(te_tx),
+            app_cx: AppCx::new(te_tx.clone()),
             redis,
             db_pool,
             assets,
@@ -152,7 +156,10 @@ pub fn start_fullstack(
         let res = tokio::select! {
             res = web::serve(config.webserver_address(), state) => res.map_err(StartFullstackError::Webserver),
             res = &mut te_handle => match res {
-                Ok(()) => Ok(()),
+                Ok(()) => {
+                    tracing::info!("trading engine shutdown");
+                    Ok(())
+                },
                 Err(err) => {
                     tracing::error!(?err, "trading engine panicked");
                     Err(StartFullstackError::Interrupted)
@@ -171,8 +178,9 @@ pub fn start_fullstack(
         // attempt to shutdown gracefully
         tracing::info!("shutting down gracefully");
 
-        // TODO: shutdown gracefully
         if !te_handle.is_finished() {
+            let _ = te_tx.send(trading::TradingEngineCmd::Shutdown).await;
+
             if let Err(err) = te_handle.await {
                 tracing::error!(?err, "trading engine shutdown panicked");
             }

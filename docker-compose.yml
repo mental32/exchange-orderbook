@@ -8,13 +8,16 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3000:3000"
+    volumes:
+      - ./etc/exchange/conf.toml:/etc/exchange/conf.toml
     networks:
       - exchange-net
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - DATABASE_URL=postgres://exchange_user:exchange_password@postgres:5432/exchange
-      - RUST_LOG=trace
+      - RUST_LOG="info,exchange=trace,tower_http=debug"
+      - CONFIG_FILE_PATH=/etc/exchange/conf.toml
     depends_on:
       - redis
       - postgres
