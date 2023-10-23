@@ -1,4 +1,6 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenv::dotenv().ok();
+
     let body = async {
         tracing_subscriber::fmt::init();
         let config = exchange::Config::load_from_env();

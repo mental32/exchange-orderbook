@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT id, jstr FROM orders_event_source\n            ORDER BY id ASC\n            ",
+  "query": "SELECT id, jstr FROM orders_event_source",
   "describe": {
     "columns": [
       {
@@ -22,5 +22,5 @@
       false
     ]
   },
-  "hash": "4b4439d719faa19f04b2dab2d73e48213f4ca6309a3caad7a58f70af7bd63ddf"
+  "hash": "2a0f1bb6ee5beb468683e1acb860c63c648a458e0b0e1a3d80454dbae56253fa"
 }

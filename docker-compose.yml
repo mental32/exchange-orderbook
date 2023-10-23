@@ -13,11 +13,7 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=exchange_db
-      - POSTGRES_USER=exchange_user
-      - POSTGRES_PASSWORD=exchange_password
+      - DATABASE_URL=postgres://exchange_user:exchange_password@postgres:5432/exchange
       - RUST_LOG=trace
     depends_on:
       - redis
