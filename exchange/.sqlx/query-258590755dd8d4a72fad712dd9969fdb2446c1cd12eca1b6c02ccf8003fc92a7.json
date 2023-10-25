@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO orders_event_source (jstr) VALUES ($1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "258590755dd8d4a72fad712dd9969fdb2446c1cd12eca1b6c02ccf8003fc92a7"
+}
