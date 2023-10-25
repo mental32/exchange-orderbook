@@ -65,6 +65,10 @@ fn config_file_path() -> Option<PathBuf> {
     std::env::var(CONFIG_FILE_PATH).ok().map(PathBuf::from)
 }
 
+fn default_te_channel_capacity() -> usize {
+    1024
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default = "webserver_address")]
@@ -77,9 +81,16 @@ pub struct Config {
     database_url: String,
     #[serde(default = "config_file_path")]
     config_file_path: Option<PathBuf>,
+    #[serde(default = "default_te_channel_capacity")]
+    te_channel_capacity: usize,
 }
 
 impl Config {
+    #[track_caller]
+    pub fn load_from_toml(st: &str) -> Self {
+        toml::from_str(st).expect("Failed to parse config file")
+    }
+
     #[track_caller]
     pub fn load_from_env() -> Self {
         let config_file_path = config_file_path()
@@ -126,11 +137,15 @@ impl Config {
         format!("redis://{redis_host}:{redis_port}")
     }
 
-    pub fn database_url(&self) -> String {
-        self.database_url.clone()
+    pub fn database_url(&self) -> &str {
+        &self.database_url
     }
 
     pub fn config_file_path(&self) -> Option<&Path> {
         self.config_file_path.as_ref().map(|p| p.as_ref())
+    }
+
+    pub fn te_channel_capacity(&self) -> usize {
+        self.te_channel_capacity
     }
 }
