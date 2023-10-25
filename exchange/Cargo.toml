@@ -37,6 +37,7 @@ features = [
     "rust_decimal",
     "runtime-tokio",
     "macros",
+    "migrate",
     "uuid",
     "json",
 ]

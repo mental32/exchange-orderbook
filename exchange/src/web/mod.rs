@@ -3,6 +3,8 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::response::IntoResponse;
+use axum::response::Response;
 use axum::routing::post;
 use axum::Router;
 use axum::ServiceExt;
@@ -15,6 +17,7 @@ use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetReques
 mod middleware;
 
 mod trade_add_order;
+pub use trade_add_order::TradeAddOrder;
 mod trade_cancel_order;
 mod trade_edit_order;
 
@@ -27,6 +30,14 @@ mod session_create;
 mod session_delete;
 
 pub type Error = axum::Error;
+
+fn internal_server_error(message: &str) -> Response {
+    (
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        message.to_owned(),
+    )
+        .into_response()
+}
 
 #[derive(Debug, Clone)]
 pub struct InternalApiState {
