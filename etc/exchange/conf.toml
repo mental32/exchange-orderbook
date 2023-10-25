@@ -1,1 +1,3 @@
-
+eth_wallet_mnemonic = ""
+bitcoin_rpc_auth_user = "bobby"
+bitcoin_rpc_auth_password = "bobby"

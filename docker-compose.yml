@@ -18,9 +18,11 @@ services:
       - DATABASE_URL=postgres://exchange_user:exchange_password@postgres:5432/exchange
       - RUST_LOG="info,exchange=trace,tower_http=debug"
       - CONFIG_FILE_PATH=/etc/exchange/conf.toml
+      - BITCOIN_RPC_URL=http://bitcoind:8332
     depends_on:
       - redis
       - postgres
+      - bitcoind
     restart: on-failure # Restart the service if it fails
     stop_signal: SIGINT # Stop the service gracefully
 
@@ -62,6 +64,21 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
     restart: always
+
+  bitcoind:
+    image: lncm/bitcoind:v25.0
+    user: 1000:1000
+    volumes:
+      - ./etc/bitcoin:/data/.bitcoin
+    restart: on-failure
+    stop_grace_period: 15m30s
+    ports:
+      - "8333:8333"
+      - "8332:8332"
+      - "28332:28332"
+      - "28333:28333"
+    networks:
+      - exchange-net
 
 networks:
   exchange-net:

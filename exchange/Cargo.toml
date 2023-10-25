@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 ahash = "0.8.3"
 argon2 = { version = "0.5.2", features = ["alloc"] }
+bitcoin = { version = "0.30.1", features = ["rand", "serde", "base64", "bitcoinconsensus", "core2"] }
+bitcoincore-rpc = "0.17.0"
 dotenv = "0.15.0"
 email_address = "0.2.4"
 futures = "0.3.28"

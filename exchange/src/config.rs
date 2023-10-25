@@ -69,6 +69,14 @@ fn default_te_channel_capacity() -> usize {
     1024
 }
 
+const BITCOIN_RPC_URL: &str = "BITCOIN_RPC_URL";
+
+fn bitcoin_rpc_url() -> String {
+    std::env::var(BITCOIN_RPC_URL).ok().unwrap_or_else(|| {
+        panic!("BITCOIN_RPC_URL env var not set");
+    })
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default = "webserver_address")]
@@ -83,6 +91,11 @@ pub struct Config {
     config_file_path: Option<PathBuf>,
     #[serde(default = "default_te_channel_capacity")]
     te_channel_capacity: usize,
+    eth_wallet_mnemonic: Option<String>,
+    #[serde(default = "bitcoin_rpc_url")]
+    bitcoin_rpc_url: String,
+    bitcoin_rpc_auth_user: String,
+    bitcoin_rpc_auth_password: String,
 }
 
 impl Config {
@@ -147,5 +160,19 @@ impl Config {
 
     pub fn te_channel_capacity(&self) -> usize {
         self.te_channel_capacity
+    }
+
+    pub fn eth_wallet_mnemonic(&self) -> Option<&str> {
+        self.eth_wallet_mnemonic.as_deref()
+    }
+
+    pub fn bitcoin_rpc_url(&self) -> &str {
+        self.bitcoin_rpc_url.as_str()
+    }
+
+    pub fn bitcoin_rpc_auth(&self) -> bitcoincore_rpc::Auth {
+        let user = self.bitcoin_rpc_auth_user.clone();
+        let password = self.bitcoin_rpc_auth_password.clone();
+        bitcoincore_rpc::Auth::UserPass(user, password)
     }
 }
