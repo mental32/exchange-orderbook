@@ -11,3 +11,9 @@ pub enum TimeInForce {
     #[serde(rename = "fok")]
     FillOrKill,
 }
+
+impl Default for TimeInForce {
+    fn default() -> Self {
+        Self::GoodTilCanceled
+    }
+}

@@ -11,3 +11,9 @@ pub enum SelfTradeProtection {
     #[serde(rename = "cb")]
     CancelBoth,
 }
+
+impl Default for SelfTradeProtection {
+    fn default() -> Self {
+        Self::DecreaseCancel
+    }
+}

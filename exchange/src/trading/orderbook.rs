@@ -105,7 +105,7 @@ impl PriceLevel {
 }
 
 /// The threshold at which the [`MultiplePriceLevels`] will switch from using array storage to heap storage.
-pub const MULTIPLE_PRICE_LEVEL_INNER_CAPACITY: usize = 128;
+pub const MULTIPLE_PRICE_LEVEL_INNER_CAPACITY: usize = 64;
 
 /// Stores multiple price levels in a contiguous vector.
 pub struct MultiplePriceLevels {

@@ -27,9 +27,9 @@ pub struct PendingFill<'a> {
     /// The taker's order.
     taker: Order,
     /// The side of the taker's order.
-    taker_side: OrderSide,
+    side: OrderSide,
     /// The order type of the taker's order.
-    taker_order_type: OrderType,
+    order_type: OrderType,
     /// The maker orders that were filled from this taker fill operation.
     maker_fills: Vec<(OrderIndex, Order, FillType)>,
     /// The outcome of the fill operation for the taker's order.
@@ -40,16 +40,16 @@ impl<'a> PendingFill<'a> {
     pub fn new(
         orderbook: &'a mut Orderbook,
         taker: Order,
-        taker_side: OrderSide,
-        taker_order_type: OrderType,
+        side: OrderSide,
+        order_type: OrderType,
         maker_fills: Vec<(OrderIndex, Order, FillType)>,
         taker_fill_outcome: FillType,
     ) -> Self {
         Self {
             orderbook,
             taker,
-            taker_side,
-            taker_order_type,
+            side,
+            order_type,
             maker_fills,
             taker_fill_outcome,
         }
@@ -57,12 +57,12 @@ impl<'a> PendingFill<'a> {
 
     /// [`OrderSide::Buy`] or [`OrderSide::Sell`] if the taker's order is buy or sell respectively.
     pub fn taker_side(&self) -> OrderSide {
-        self.taker_side
+        self.side
     }
 
     /// Returns the order type of the taker's order.
     pub fn taker_order_type(&self) -> OrderType {
-        self.taker_order_type
+        self.order_type
     }
 
     /// Returns the outcome of the fill operation.

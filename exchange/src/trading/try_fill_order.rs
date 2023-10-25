@@ -14,13 +14,13 @@ pub enum TryFillOrdersError {}
 pub fn try_fill_orders<'a>(
     orderbook: &'a mut Orderbook,
     taker: Order,
-    taker_side: OrderSide,
+    side: OrderSide,
     order_type: OrderType,
 ) -> Result<PendingFill<'a>, Infallible> {
     let mut maker_fills = vec![];
     let mut taker_fill_outcome = FillType::None;
 
-    let maker_side = match taker_side {
+    let maker_side = match side {
         OrderSide::Buy => OrderSide::Sell,
         OrderSide::Sell => OrderSide::Buy,
     };
@@ -28,7 +28,7 @@ pub fn try_fill_orders<'a>(
     match order_type {
         OrderType::Limit => {
             for (oix, order) in orderbook.iter_rel(maker_side) {
-                match taker_side {
+                match side {
                     OrderSide::Buy => {
                         if order.price > taker.price {
                             taker_fill_outcome = FillType::Partial;
@@ -84,7 +84,7 @@ pub fn try_fill_orders<'a>(
     let pending_fill = PendingFill::new(
         orderbook,
         taker,
-        taker_side,
+        side,
         order_type,
         maker_fills,
         taker_fill_outcome,

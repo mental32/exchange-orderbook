@@ -13,7 +13,7 @@ use crate::web::InternalApiState;
 
 /// A verified user ID from a session token
 #[derive(Debug, Clone)]
-pub struct UserId(uuid::Uuid);
+pub struct UserUuid(pub uuid::Uuid);
 
 /// Check if the request has a session-token cookie which is a
 /// 32-byte hex string that should be a key in Redis with the format
@@ -54,7 +54,7 @@ pub async fn validate_session_token_redis<B>(
     match user_id {
         Some(Ok(uuid)) => {
             // Session token is valid; proceed to the next middleware or handler
-            request.extensions_mut().insert(UserId(uuid));
+            request.extensions_mut().insert(UserUuid(uuid));
             next.run(request).await
         }
         None | Some(Err(_)) => {
