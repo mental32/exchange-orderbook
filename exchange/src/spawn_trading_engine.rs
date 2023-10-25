@@ -15,11 +15,8 @@ impl SpawnTradingEngine {
     pub async fn initialize_trading_engine(
         self,
         db_pool: sqlx::PgPool,
-        redis: redis::Client,
     ) -> Result<(trading::TradingEngineTx, tokio::task::JoinHandle<()>), sqlx::Error> {
         let Self { input, handle } = self;
-
-        tracing::info!("preparing trading engine");
 
         // stream out rows from the orders_event_source table, deserialize them into TradeCmds
         // and send them to the trading engine for processing.

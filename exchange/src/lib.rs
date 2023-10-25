@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
+use bitcoincore_rpc::RpcApi;
 use futures::StreamExt;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -66,22 +67,35 @@ pub fn start_fullstack(
 
     async move {
         tracing::debug!(
-            config = toml::to_string(&config).ok(),
+            config = ?config,
             "starting exchange in fullstack mode"
         );
 
+        let btc_client = bitcoincore_rpc::Client::new(
+            config.bitcoin_rpc_url(),
+            config.bitcoin_rpc_auth().clone(),
+        )
+        .unwrap();
+
+        // let network = btc_client.get_network_info().unwrap();
+        // tracing::info!("connected to bitcoin rpc");
+        // panic!("{network:#?}");
+
+        tracing::info!(url = ?config.database_url(), "connecting to database");
+
         let db_pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(20)
+            .min_connections(1)
             .connect(&config.database_url())
             .await?;
+
+        tracing::info!("preparing trading engine");
 
         let (te_tx, mut te_handle) =
             spawn_trading_engine::spawn_trading_engine(&config, db_pool.clone())
                 .await
-                .initialize_trading_engine(db_pool.clone(), redis.clone())
+                .initialize_trading_engine(db_pool.clone())
                 .await?;
-
-        tracing::info!("finished preparing trading engine");
 
         let assets = Arc::new(HashMap::from_iter(asset::internal_asset_list()));
         let state = web::InternalApiState {
@@ -90,6 +104,8 @@ pub fn start_fullstack(
             db_pool,
             assets,
         };
+
+        tracing::info!("launching http server");
 
         let res = tokio::select! {
             res = web::serve(config.webserver_address(), state) => res.map_err(StartFullstackError::Webserver),
