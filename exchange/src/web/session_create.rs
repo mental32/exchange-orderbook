@@ -42,7 +42,7 @@ pub async fn session_create(
 ) -> Response {
     tracing::trace!(?body, "session_create");
 
-    let db = state.db_pool.clone();
+    let db = state.app_cx.db_pool.clone();
 
     let rec = match sqlx::query!(
         // language=PostgreSQL

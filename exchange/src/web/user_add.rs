@@ -75,7 +75,7 @@ pub async fn user_add(
         "#,
         body.email.as_str()
     )
-    .fetch_optional(&state.db_pool)
+    .fetch_optional(&state.app_cx.db_pool)
     .await?;
 
     if rec.is_some() {
@@ -95,11 +95,11 @@ pub async fn user_add(
         body.email.as_str(),
         password_hash.as_bytes(),
     )
-    .execute(&state.db_pool)
+    .execute(&state.app_cx.db_pool)
     .await?;
 
     let rec = sqlx::query!("SELECT id FROM users WHERE email = $1", body.email.as_str())
-        .fetch_one(&state.db_pool)
+        .fetch_one(&state.app_cx.db_pool)
         .await?;
 
     Ok(Json(serde_json::json!({

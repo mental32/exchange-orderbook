@@ -43,7 +43,7 @@ pub async fn user_get(
         "#,
         body.id
     )
-    .fetch_optional(&state.db_pool)
+    .fetch_optional(&state.app_cx.db_pool)
     .await?;
 
     match rec {

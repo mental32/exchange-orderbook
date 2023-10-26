@@ -256,19 +256,20 @@ impl Assets {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Config, SpawnTradingEngine};
+    use crate::spawn_trading_engine::{spawn_trading_engine, SpawnTradingEngine};
+    use crate::Config;
 
     use super::*;
 
     async fn trading_engine_fixture(db_pool: sqlx::PgPool) -> (Config, SpawnTradingEngine) {
         let config = crate::config::Config::load_from_toml("");
-        let spawn_trading_engine = crate::spawn_trading_engine(&config, db_pool).await;
+        let spawn_trading_engine = spawn_trading_engine(&config, db_pool).await;
         (config, spawn_trading_engine)
     }
 
     #[sqlx::test]
     async fn test_startup_shutdown(db_pool: sqlx::PgPool) {
-        let (_config, mut spawn_trading_engine) = trading_engine_fixture(db_pool).await;
+        let (_config, spawn_trading_engine) = trading_engine_fixture(db_pool).await;
         spawn_trading_engine
             .input
             .send(TradingEngineCmd::Shutdown)

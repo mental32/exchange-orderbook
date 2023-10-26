@@ -6,10 +6,17 @@
 //! example, instead of calling `te_tx.send(TradingEngineCmd::PlaceOrder { .. })`
 //! you would call `app.place_order(..)`.
 //!
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use crate::bitcoin::{Address, BitcoinCoreRpc};
+
+use ::bitcoin::address::NetworkUnchecked;
+use futures::stream::FuturesUnordered;
+use futures::{Stream, StreamExt};
 use tokio::sync::oneshot;
+use uuid::Uuid;
 
 use crate::trading::{
     OrderUuid, PlaceOrder, TradeCmd, TradingEngineCmd, TradingEngineError, TradingEngineTx,
@@ -22,6 +29,10 @@ use super::*;
 pub struct AppCx {
     /// a mpsc sender to the trading engine supervisor.
     te_tx: TradingEngineTx,
+    /// a client for the bitcoin core rpc.
+    bitcoind_rpc: BitcoinCoreRpc,
+    /// a pool of connections to the database.
+    pub(crate) db_pool: sqlx::PgPool,
     /// Read-only data or data that has interior mutability.
     inner_ro: Arc<Inner>,
 }
@@ -52,9 +63,15 @@ impl<T, E> Response<T, E> {
 }
 
 impl AppCx {
-    pub fn new(te_tx: TradingEngineTx) -> Self {
+    pub fn new(
+        te_tx: TradingEngineTx,
+        bitcoind_rpc: BitcoinCoreRpc,
+        db_pool: sqlx::PgPool,
+    ) -> Self {
         Self {
             te_tx,
+            bitcoind_rpc,
+            db_pool,
             inner_ro: Arc::new(Inner {
                 te_suspended: AtomicBool::new(false),
             }),
