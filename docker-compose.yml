@@ -61,8 +61,6 @@ services:
       - POSTGRES_USER=exchange_user
       - POSTGRES_PASSWORD=exchange_password
       - TZ=UTC
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
     restart: always
 
   bitcoind:
