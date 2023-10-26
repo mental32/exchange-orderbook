@@ -9,7 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .init();
 
         let config = exchange::Config::load_from_env();
-        exchange::start_fullstack(config, exchange::signal::from_host_os())
+        exchange::bitcoin::start_grpc_proxy(config, exchange::signal::from_host_os())
             .await
             .map_err(|err| Box::new(err) as Box<_>)
     };

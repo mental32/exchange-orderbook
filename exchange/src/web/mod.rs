@@ -44,7 +44,6 @@ pub struct InternalApiState {
     pub(crate) app_cx: crate::app_cx::AppCx,
     pub(crate) redis: redis::Client,
     pub(crate) assets: Arc<HashMap<crate::asset::AssetKey, crate::Asset>>,
-    pub(crate) db_pool: sqlx::PgPool,
 }
 
 /// Router for the /trade path

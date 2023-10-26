@@ -96,6 +96,7 @@ pub struct Config {
     bitcoin_rpc_url: String,
     bitcoin_rpc_auth_user: String,
     bitcoin_rpc_auth_password: String,
+    bitcoin_wallet_name: String,
 }
 
 impl Config {
@@ -170,9 +171,13 @@ impl Config {
         self.bitcoin_rpc_url.as_str()
     }
 
-    pub fn bitcoin_rpc_auth(&self) -> bitcoincore_rpc::Auth {
+    pub fn bitcoin_rpc_auth(&self) -> (String, String) {
         let user = self.bitcoin_rpc_auth_user.clone();
         let password = self.bitcoin_rpc_auth_password.clone();
-        bitcoincore_rpc::Auth::UserPass(user, password)
+        (user, password)
+    }
+
+    pub(crate) fn bitcoin_wallet_name(&self) -> &str {
+        self.bitcoin_wallet_name.as_str()
     }
 }
