@@ -180,4 +180,8 @@ impl Config {
     pub(crate) fn bitcoin_wallet_name(&self) -> &str {
         self.bitcoin_wallet_name.as_str()
     }
+
+    pub(crate) fn bitcoin_grpc_bind_addr(&self) -> SocketAddr {
+        "0.0.0.0:50051".to_owned().parse().unwrap()
+    }
 }

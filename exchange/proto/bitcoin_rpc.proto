@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package bitcoincore;
+
+
+message EmptyRequest {}
+
+
+service BitcoinCoreRpc {
+
+}
