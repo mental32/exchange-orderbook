@@ -1,26 +1,20 @@
--- An account source defines what the source of an account is. For example, a user account or some external account like a bank transfer or a chain tx.
-CREATE TABLE IF NOT EXISTS account_sources (
-    id SERIAL PRIMARY KEY,
-    source_type TEXT NOT NULL CHECK (source_type IN ('user', 'fiat', 'crypto')),
-    source_id TEXT NOT NULL -- btc/eth if crypto, bank transfer id if fiat, user uuid if user
-);
-
 -- accounts table tracks all accounts in the system that can interact with money
 --
 -- sometimes accounts are not users! for example, a chain deposit or withdrawal account, or a bank transfer
 -- this is why we have account-source, to track the source of the account and that will tell us what type of account it is
 --
--- the balance is in the smallest unit of the currency, for example, satoshis for BTC, wei for ETH, cents for USD, etc.
 CREATE TABLE IF NOT EXISTS accounts (
     id SERIAL PRIMARY KEY,
-    source_id INT NOT NULL,  -- Reference to account_sources table
     currency TEXT NOT NULL CHECK (currency ~ '^[A-Z]{3,}$'),  -- Currency codes in uppercase
-    balance BIGINT NOT NULL DEFAULT 0,  -- Balance in satoshis or the smallest unit for other currencies
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (source_id) REFERENCES account_sources(id) ON DELETE NO ACTION,  -- Soft delete
+    source_type TEXT NOT NULL CHECK (source_type IN ('user', 'fiat', 'crypto')),
+    source_id TEXT NOT NULL, -- btc/eth if crypto, bank transfer id if fiat, user uuid if user
     UNIQUE (source_id, currency)
 );
+
+-- insert an account for the exchange's cash account
+INSERT INTO accounts (currency, source_type, source_id) VALUES ('USD', 'fiat', 'exchange');
 
 -- this table is a crude double-entry accounting journal, it is used to keep track of all transactions between accounts
 --
