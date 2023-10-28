@@ -45,10 +45,35 @@ pub enum TradingEngineState {
     Running,
 }
 
+#[derive(Debug, Clone)]
+pub struct ReserveFiat {
+    pub previous_balance: NonZeroU64,
+    pub new_balance: Option<NonZeroU64>,
+}
+
+#[derive(Debug, Error)]
+pub enum ReserveError {
+    #[error("insufficient funds")]
+    InsufficientFunds,
+    #[error("database error")]
+    Database(#[from] sqlx::Error),
+}
+
+impl From<ReserveError> for PlaceOrderError {
+    fn from(value: ReserveError) -> Self {
+        match value {
+            ReserveError::InsufficientFunds => PlaceOrderError::InsufficientFunds,
+            ReserveError::Database(_) => todo!("internal error"),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum PlaceOrderError {
     #[error("trading engine unresponsive")]
     TradingEngineUnresponsive,
+    #[error("insufficient funds")]
+    InsufficientFunds,
 }
 
 #[must_use]
@@ -88,6 +113,73 @@ impl AppCx {
         self.inner_ro.te_suspended.store(false, Ordering::SeqCst);
     }
 
+    async fn fiat_balance(&self, user_uuid: Uuid) -> Result<Option<NonZeroU64>, sqlx::Error> {
+        let rec = sqlx::query!(
+            r#"
+            WITH account_id AS (
+                SELECT id FROM accounts 
+                WHERE source_type = 'user' AND source_id = $1
+            )
+            SELECT (
+                (SELECT COALESCE(SUM(amount), 0) FROM account_tx_journal WHERE credit_account_id = (SELECT id FROM account_id))::BIGINT -
+                (SELECT COALESCE(SUM(amount), 0) FROM account_tx_journal WHERE debit_account_id = (SELECT id FROM account_id))::BIGINT
+            ) AS balance
+            "#,
+            user_uuid.to_string()
+        ).fetch_one(&self.db_pool).await?.balance;
+        tracing::trace!(?rec, %user_uuid, "fiat balance");
+        Ok(NonZeroU64::new(rec.unwrap_or_default() as u64))
+    }
+
+    async fn reserve_fiat(
+        &self,
+        user_uuid: Uuid,
+        quantity: std::num::NonZeroU32,
+    ) -> Result<ReserveFiat, ReserveError> {
+        let balance = self.fiat_balance(user_uuid).await?;
+
+        let balance = match balance {
+            Some(i) if i.get() >= quantity.get() as u64 => i,
+            _ => return Err(ReserveError::InsufficientFunds),
+        };
+
+        // create a new account_tx_journal record to debit the user's account for the reserved amount.
+        let _res = sqlx::query!(
+            r#"
+            INSERT INTO account_tx_journal (credit_account_id, debit_account_id, currency, amount, transaction_type) VALUES (
+                (SELECT id FROM accounts WHERE source_type = 'fiat' AND source_id = 'exchange' AND currency = 'USD'),
+                (SELECT id FROM accounts WHERE source_type = 'user' AND source_id = $2),
+                'USD',
+                $1,
+                'reserve fiat'
+            );            
+            "#,
+            quantity.get() as i64,
+            user_uuid.to_string()
+        ).execute(&self.db_pool).await?;
+
+        tracing::trace!(?_res, %user_uuid, "reserved USD fiat from user account");
+
+        let new_balance = self.fiat_balance(user_uuid).await?;
+        if let Some(nb) = new_balance {
+            assert!(nb.get() < balance.get());
+        }
+
+        Ok(ReserveFiat {
+            previous_balance: balance,
+            new_balance,
+        })
+    }
+
+    async fn reserve_crypto(
+        &self,
+        user_uuid: Uuid,
+        quantity: std::num::NonZeroU32,
+        asset: Asset,
+    ) -> Result<(), ReserveError> {
+        todo!()
+    }
+
     pub async fn place_order(
         &self,
         asset: Asset,
@@ -106,6 +198,13 @@ impl AppCx {
             price,
             time_in_force,
         } = trade_add_order;
+
+        match side {
+            OrderSide::Buy => {
+                self.reserve_fiat(user_uuid, quantity).await?;
+            }
+            OrderSide::Sell => self.reserve_crypto(user_uuid, quantity, asset).await?,
+        };
 
         let (place_order_tx, wait_response) = oneshot::channel();
         let place_order = PlaceOrder::new(
