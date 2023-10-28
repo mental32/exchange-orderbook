@@ -3,6 +3,7 @@
 use std::num::NonZeroU32;
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::Asset;
@@ -28,6 +29,11 @@ pub use trigger::Triggers;
 /// The unique identifier for an order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub struct OrderUuid(pub uuid::Uuid);
+impl OrderUuid {
+    fn new_v4() -> OrderUuid {
+        OrderUuid(uuid::Uuid::new_v4())
+    }
+}
 
 /// type-alias for a [`tokio::sync::mpsc::Sender``] that sends [TradingEngineCmd]s.
 pub type TradingEngineTx = mpsc::Sender<TradingEngineCmd>;
@@ -47,7 +53,7 @@ pub struct PlaceOrder {
     side: OrderSide,
 }
 
-pub type PlaceOrderTx = oneshot::Sender<Result<OrderUuid, TradingEngineError>>;
+pub type PlaceOrderTx = oneshot::Sender<Result<PlaceOrderResult, TradingEngineError>>;
 
 impl PlaceOrder {
     pub fn new(
@@ -90,6 +96,32 @@ impl CancelOrder {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum PlaceOrderError {
+    #[error("order was not completely filled due to insufficient liquidity")]
+    FillOrKillFailed,
+    #[error("order was not completely filled due to insufficient liquidity")]
+    InsufficientLiquidity,
+}
+
+pub struct PlaceOrderResult {
+    // original order information
+    pub asset: Asset,
+    pub user_uuid: uuid::Uuid,
+    pub price: NonZeroU32,
+    pub quantity: NonZeroU32,
+    pub order_type: OrderType,
+    pub stp: SelfTradeProtection,
+    pub time_in_force: TimeInForce,
+    pub side: OrderSide,
+    // result of the order
+    pub order_uuid: OrderUuid,
+    pub order_index: Option<OrderIndex>,
+    pub fill_type: FillType,
+    pub quantity_filled: u32,
+    pub quantity_remaining: u32,
+}
+
 pub fn do_place_order(
     assets: &mut Assets,
     PlaceOrder {
@@ -102,7 +134,7 @@ pub fn do_place_order(
         time_in_force,
         side,
     }: PlaceOrder,
-) -> Result<OrderUuid, TradingEngineError> {
+) -> Result<PlaceOrderResult, TradingEngineError> {
     let asset_book = assets.match_asset_mut(asset);
 
     let taker: Order = Order {
@@ -117,33 +149,61 @@ pub fn do_place_order(
 
     match (pending_fill.taker_fill_outcome(), time_in_force) {
         (FillType::Complete, _) => (), // do nothing, order was completely filled.
-        (FillType::Partial, TimeInForce::GoodTilCanceled) => todo!(),
-        (FillType::Partial, TimeInForce::GoodTilDate) => todo!(),
-        (FillType::Partial, TimeInForce::ImmediateOrCancel) => todo!(),
-        (FillType::Partial, TimeInForce::FillOrKill) => todo!(),
-        // there were no resting orders that could be filled against the taker order.
-        (FillType::None, TimeInForce::GoodTilCanceled) => todo!(),
-        (FillType::None, TimeInForce::GoodTilDate) => todo!(),
-        (FillType::None, TimeInForce::ImmediateOrCancel) => todo!(),
-        (FillType::None, TimeInForce::FillOrKill) => todo!(),
+        (FillType::Partial, TimeInForce::GoodTilCanceled) => (), // add to orderbook as resting order.
+        (FillType::Partial, TimeInForce::GoodTilDate) => (), // add to orderbook as resting order, it will be tracked and cancelled separately
+        (FillType::Partial, TimeInForce::ImmediateOrCancel) => (), // commit the partial fill, but do not add to orderbook.
+        (FillType::Partial, TimeInForce::FillOrKill) => {
+            // there were no resting orders that could be filled against the taker order.
+            return Err(PlaceOrderError::FillOrKillFailed.into());
+        }
+        (FillType::None, TimeInForce::GoodTilCanceled) => (), // add to orderbook as resting order.
+        (FillType::None, TimeInForce::GoodTilDate) => (), // add to orderbook as resting order, it will be tracked and cancelled separately
+        (FillType::None, TimeInForce::ImmediateOrCancel) => {
+            // no fill, no orderbook entry, NO SOUP FOR YOU!
+            return Err(PlaceOrderError::InsufficientLiquidity.into());
+        }
+        (FillType::None, TimeInForce::FillOrKill) => {
+            return Err(PlaceOrderError::FillOrKillFailed.into())
+        }
     }
 
     match pending_fill.commit() {
         Ok((fill_type, order)) => {
             if let Some(order) = order {
-                // order was not completely filled, add it to the orderbook.
-                let order_ix = match side {
-                    OrderSide::Buy => asset_book.orderbook_mut().push_bid(order),
-                    OrderSide::Sell => asset_book.orderbook_mut().push_ask(order),
+                let order_index = if matches!(time_in_force, TimeInForce::ImmediateOrCancel) {
+                    // partial fill, but we do not add it to the orderbook because it is an IOC order.
+                    None
+                } else {
+                    // order was not completely filled, add it to the orderbook.
+                    Some(match side {
+                        OrderSide::Buy => asset_book.orderbook_mut().push_bid(order),
+                        OrderSide::Sell => asset_book.orderbook_mut().push_ask(order),
+                    })
                 };
 
+                assert!(quantity.get() >= order.quantity.get());
+
+                Ok(PlaceOrderResult {
+                    asset,
+                    user_uuid,
+                    order_index,
+                    price,
+                    quantity,
+                    order_type,
+                    stp,
+                    time_in_force,
+                    side,
+                    order_uuid: OrderUuid::new_v4(),
+                    fill_type,
+                    quantity_filled: quantity.get() - order.quantity.get(),
+                    quantity_remaining: order.quantity.get(),
+                })
+            } else {
                 todo!()
             }
         }
         Err(_) => todo!(),
-    };
-
-    todo!()
+    }
 }
 
 pub fn do_cancel_order(
@@ -170,7 +230,7 @@ pub fn do_cancel_order(
     Ok(())
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error)]
 pub enum TradingEngineError {
     #[error("the trading engine is suspended")]
     Suspended,
@@ -180,6 +240,8 @@ pub enum TradingEngineError {
     OrderNotFound(uuid::Uuid, OrderUuid),
     #[error("database error")]
     Database(#[from] sqlx::Error),
+    #[error("place order error")]
+    PlaceOrder(#[from] PlaceOrderError),
 }
 
 #[derive(Deserialize, Serialize)]

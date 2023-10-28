@@ -17,8 +17,8 @@ use uuid::Uuid;
 
 use crate::bitcoin::BitcoinRpcClient;
 use crate::trading::{
-    CancelOrder, OrderSide, OrderUuid, PlaceOrder, TradeCmd, TradingEngineCmd, TradingEngineError,
-    TradingEngineTx,
+    CancelOrder, OrderSide, OrderUuid, PlaceOrder, PlaceOrderResult, TradeCmd, TradingEngineCmd,
+    TradingEngineError, TradingEngineTx,
 };
 use crate::web::TradeAddOrder;
 
@@ -261,7 +261,7 @@ impl AppCx {
         asset: Asset,
         user_uuid: uuid::Uuid,
         trade_add_order: TradeAddOrder,
-    ) -> Result<(Response<OrderUuid>, ReserveOk), PlaceOrderError> {
+    ) -> Result<(Response<PlaceOrderResult>, ReserveOk), PlaceOrderError> {
         if !matches!(self.trading_engine_state(), TradingEngineState::Running) {
             return Err(PlaceOrderError::TradingEngineUnresponsive);
         }
