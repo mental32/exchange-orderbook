@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::bitcoin::BitcoinRpcClient;
 use crate::trading::{
-    OrderSide, OrderUuid, PlaceOrder, TradeCmd, TradingEngineCmd, TradingEngineError,
+    CancelOrder, OrderSide, OrderUuid, PlaceOrder, TradeCmd, TradingEngineCmd, TradingEngineError,
     TradingEngineTx,
 };
 use crate::web::TradeAddOrder;
@@ -151,6 +151,12 @@ pub enum PlaceOrderError {
     TradingEngineUnresponsive,
     #[error("insufficient funds")]
     InsufficientFunds,
+}
+
+#[derive(Debug, Error)]
+pub enum CancelOrderError {
+    #[error("trading engine unresponsive")]
+    TradingEngineUnresponsive,
 }
 
 #[must_use]
@@ -308,6 +314,33 @@ impl AppCx {
                     tracing::error!(?err, "failed to revert reserve");
                 }
                 Err(PlaceOrderError::TradingEngineUnresponsive)
+            }
+        }
+    }
+
+    pub async fn cancel_order(
+        &self,
+        user_uuid: Uuid,
+        order_uuid: Uuid,
+    ) -> Result<Response<()>, CancelOrderError> {
+        // Running and ReduceOnly are the only states where we can cancel orders.
+        if matches!(self.trading_engine_state(), TradingEngineState::Suspended) {
+            return Err(CancelOrderError::TradingEngineUnresponsive);
+        }
+
+        let (cancel_order_tx, wait_response) = oneshot::channel();
+        let cancel_order = CancelOrder::new(user_uuid, OrderUuid(order_uuid));
+
+        let cmd = TradeCmd::CancelOrder((cancel_order, cancel_order_tx));
+
+        match self.te_tx.send(TradingEngineCmd::Trade(cmd)).await {
+            Ok(()) => Ok(Response(wait_response)),
+            Err(err) => {
+                tracing::warn!(
+                    ?err,
+                    "failed to send cancel order command to trading engine"
+                );
+                Err(CancelOrderError::TradingEngineUnresponsive)
             }
         }
     }
