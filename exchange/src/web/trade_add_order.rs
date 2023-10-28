@@ -55,7 +55,7 @@ pub async fn trade_add_order(
         tracing::info!(?asset, "placing order for asset");
     }
 
-    let response = match state
+    let (response, reserved_funds) = match state
         .app_cx
         .place_order(asset, user_uuid, trade_add_order_body)
         .await
@@ -67,7 +67,18 @@ pub async fn trade_add_order(
         }
     };
 
-    match response.wait().await {
+    let _deferred_revert = reserved_funds.defer_revert(
+        tokio::runtime::Handle::current(),
+        state.app_cx.db_pool.clone(),
+    );
+
+    let order_uuid = response.wait().await;
+
+    if matches!(order_uuid, Some(Ok(_))) {
+        _deferred_revert.cancel();
+    }
+
+    match order_uuid {
         Some(Ok(OrderUuid(order_uuid))) => {
             tracing::info!(?order_uuid, "order placed");
             Json(TradeAddOrderResponse { order_uuid }).into_response()
