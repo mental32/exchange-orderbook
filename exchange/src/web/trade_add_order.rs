@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use super::middleware::auth::UserUuid;
 use super::InternalApiState;
 use crate::trading::{
-    OrderSide, OrderType, OrderUuid, SelfTradeProtection, TimeInForce, TradingEngineError as TErr,
+    OrderSide, OrderType, OrderUuid, PlaceOrder, PlaceOrderResult, SelfTradeProtection,
+    TimeInForce, TradingEngineError as TErr,
 };
 use crate::Asset;
 
@@ -75,22 +76,21 @@ pub async fn trade_add_order(
     }
 
     match order_uuid {
-        Some(Ok(OrderUuid(order_uuid))) => {
+        Some(Ok(PlaceOrderResult { order_uuid, .. })) => {
             tracing::info!(?order_uuid, "order placed");
-            Json(TradeAddOrderResponse { order_uuid }).into_response()
+            Json(TradeAddOrderResponse {
+                order_uuid: order_uuid.0,
+            })
+            .into_response()
         }
         Some(Err(err)) => match err {
-            TErr::Suspended => {
-                tracing::warn!("trading engine suspended");
-                super::internal_server_error("trading engine suspended")
-            }
-            TErr::OrderNotFound(_, _) => {
-                unreachable!()
-            }
             TErr::UnserializableInput => super::internal_server_error(
                 "this input was considered problematic and could not be processed",
             ),
-            TErr::Database(_) => super::internal_server_error("database error"),
+            err => {
+                tracing::warn!(?err, "failed to place order");
+                super::internal_server_error("failed to place order")
+            }
         },
         None => {
             tracing::warn!("trading engine unresponsive");
