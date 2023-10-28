@@ -21,6 +21,7 @@ futures = "0.3.28"
 hex = "0.4"
 jsonrpc-async = "2.0.2"
 mime = "0.3.17"
+prost = "0.12.1"
 rand = "0.8.5"
 rmp = "0.8.12"
 rmp-serde = "1.1.2"
@@ -33,6 +34,7 @@ tinyvec = { version = "1.6.0", features = ["rustc_1_57", "std", "alloc"] }
 tokio = { version = "1.32.0", features = ["full"] }
 tokio-tungstenite = { version = "0.20.1", features = ["native-tls-vendored"] }
 toml = "0.8.2"
+tonic = "0.10.2"
 tower = { version = "0.4.13", features = ["full"] }
 tower-http = { version = "0.4.4", features = ["full"] }
 tracing = "0.1.37"
@@ -78,3 +80,6 @@ features = [
 [profile.release]
 codegen-units = 1
 lto = true
+
+[build-dependencies]
+tonic-build = "0.10.2"
