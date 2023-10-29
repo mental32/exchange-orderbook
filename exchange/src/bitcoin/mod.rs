@@ -18,21 +18,24 @@ struct BitcoinCoreRpcImpl {
 
 impl proto::bitcoin_core_rpc_server::BitcoinCoreRpc for BitcoinCoreRpcImpl {}
 
-pub async fn start_grpc_proxy(config: Config, signals: Signals) -> Result<(), Infallible> {
+pub async fn start_grpc_proxy(
+    config: Config,
+    signals: Signals,
+) -> Result<(), tonic::transport::Error> {
     use proto::bitcoin_core_rpc_server::BitcoinCoreRpcServer;
 
     let addr = config.bitcoin_grpc_bind_addr();
+    tracing::info!(%addr, "starting grpc proxy");
+
+    let svc = BitcoinCoreRpcServer::new(BitcoinCoreRpcImpl { config, signals });
 
     tonic::transport::Server::builder()
-        .add_service(BitcoinCoreRpcServer::new(BitcoinCoreRpcImpl {
-            config,
-            signals,
-        }))
-        .serve(addr)
+        .add_service(svc)
+        .serve_with_shutdown(addr, async move {
+            let _ = signals.ctrl_c().await;
+            tracing::warn!("SIGINT received");
+        })
         .await
-        .unwrap();
-
-    Ok(())
 }
 
 /// Connect to a Bitcoin Core RPC server using the given configuration.
@@ -42,5 +45,9 @@ pub async fn start_grpc_proxy(config: Config, signals: Signals) -> Result<(), In
 /// jsonrpc over a direct http connection to the bitcoincore node or it will connect to the grpc proxy.
 ///
 pub async fn connect_bitcoin_rpc(config: &Config) -> Result<BitcoinRpcClient, Infallible> {
-    todo!()
+    Ok(
+        BitcoinRpcClient::new_grpc(config.bitcoin_grpc_endpoint().clone())
+            .await
+            .unwrap(),
+    )
 }

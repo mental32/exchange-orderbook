@@ -13,13 +13,15 @@ RUN cargo chef cook --release --recipe-path recipe.json
 WORKDIR /app
 COPY . .
 RUN apt-get update --yes && \
-    cargo build --release --bin exchange --target-dir /app/target/ && \
-    sha256sum /app/target/release/exchange
+    apt-get install --yes protobuf-compiler && \
+    cargo build --release --bins --target-dir /app/target/ && \
+    sha256sum /app/target/release/exchange /app/target/release/bitcoind-grpc
 
 FROM debian:stable-20230919-slim AS runtime
 WORKDIR /app
 COPY --from=builder /app/target/release/exchange /usr/local/bin
-RUN apt-get update --yes && apt-get install --yes ca-certificates protobuf-compiler && apt-get clean --yes
+COPY --from=builder /app/target/release/bitcoind-grpc /usr/local/bin
+RUN apt-get update --yes && apt-get install --yes ca-certificates && apt-get clean --yes
 ENV RUST_LOG "info"
 ENV MACHINE_LOGGING "true"
 EXPOSE 3000

@@ -23,6 +23,29 @@ services:
       - redis
       - postgres
       - bitcoind
+      - bitcoind-grpc-proxy
+    restart: on-failure # Restart the service if it fails
+    stop_signal: SIGINT # Stop the service gracefully
+
+  bitcoind-grpc-proxy:
+    image: exchange-orderbook:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "50051:50051"
+    volumes:
+      - ./etc/exchange/conf.toml:/etc/exchange/conf.toml
+    networks:
+      - exchange-net
+    environment:
+      - RUST_LOG="info"
+      - DATABASE_URL=postgres://exchange_user:exchange_password@postgres:5432/exchange
+      - CONFIG_FILE_PATH=/etc/exchange/conf.toml
+      - BITCOIN_RPC_URL=http://bitcoind:8332
+    depends_on:
+      - bitcoind
+    command: [ "/usr/local/bin/bitcoind-grpc" ]
     restart: on-failure # Restart the service if it fails
     stop_signal: SIGINT # Stop the service gracefully
 

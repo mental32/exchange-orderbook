@@ -65,7 +65,7 @@ fn config_file_path() -> Option<PathBuf> {
     std::env::var(CONFIG_FILE_PATH).ok().map(PathBuf::from)
 }
 
-fn default_te_channel_capacity() -> usize {
+const fn default_te_channel_capacity() -> usize {
     1024
 }
 
@@ -75,6 +75,28 @@ fn bitcoin_rpc_url() -> String {
     std::env::var(BITCOIN_RPC_URL).ok().unwrap_or_else(|| {
         panic!("BITCOIN_RPC_URL env var not set");
     })
+}
+
+fn default_bitcoin_grpc_endpoint() -> tonic::transport::Endpoint {
+    tonic::transport::Endpoint::from_static("http://[::1]:50051")
+}
+
+fn de_grpc_endpoint<'de, D>(deserializer: D) -> Result<tonic::transport::Endpoint, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let st = String::deserialize(deserializer)?;
+    tonic::transport::Endpoint::from_shared(st).map_err(serde::de::Error::custom)
+}
+
+fn ser_endpoint_to_string<S>(
+    endpoint: &tonic::transport::Endpoint,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&endpoint.uri().to_string())
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -97,6 +119,11 @@ pub struct Config {
     bitcoin_rpc_auth_user: String,
     bitcoin_rpc_auth_password: String,
     bitcoin_wallet_name: String,
+    #[serde(
+        deserialize_with = "de_grpc_endpoint",
+        serialize_with = "ser_endpoint_to_string"
+    )]
+    bitcoin_grpc_endpoint: tonic::transport::Endpoint,
 }
 
 impl Config {
@@ -177,11 +204,15 @@ impl Config {
         (user, password)
     }
 
-    pub(crate) fn bitcoin_wallet_name(&self) -> &str {
+    pub fn bitcoin_wallet_name(&self) -> &str {
         self.bitcoin_wallet_name.as_str()
     }
 
-    pub(crate) fn bitcoin_grpc_bind_addr(&self) -> SocketAddr {
+    pub fn bitcoin_grpc_bind_addr(&self) -> SocketAddr {
         "0.0.0.0:50051".to_owned().parse().unwrap()
+    }
+
+    pub fn bitcoin_grpc_endpoint(&self) -> &tonic::transport::Endpoint {
+        &self.bitcoin_grpc_endpoint
     }
 }
