@@ -199,10 +199,10 @@ pub fn do_place_order(
                     quantity_remaining: order.quantity.get(),
                 })
             } else {
-                todo!()
+                todo!("total fill")
             }
         }
-        Err(_) => todo!(),
+        Err(_) => todo!("error filling order"),
     }
 }
 
