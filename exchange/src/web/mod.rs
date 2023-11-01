@@ -29,6 +29,8 @@ mod user_get;
 mod session_create;
 mod session_delete;
 
+mod public_time;
+
 pub type Error = axum::Error;
 
 fn internal_server_error(message: &str) -> Response {
@@ -99,6 +101,10 @@ pub fn session_routes(state: InternalApiState) -> Router {
     Router::new().route("/session", session).with_state(state)
 }
 
+pub fn public_routes() -> Router {
+    Router::new().route("/public/time", axum::routing::get(public_time::public_time))
+}
+
 /// Using [`axum`], serve the internal API on the given address with the provided exchange implementation.
 pub fn serve(
     address: SocketAddr,
@@ -106,7 +112,8 @@ pub fn serve(
 ) -> impl Future<Output = Result<(), Error>> {
     let router = trade_routes(state.clone())
         .merge(user_routes(state.clone()))
-        .merge(session_routes(state.clone()));
+        .merge(session_routes(state.clone()))
+        .merge(public_routes());
 
     let x_request_id = axum::http::HeaderName::from_static("x-request-id");
 
