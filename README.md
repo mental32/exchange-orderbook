@@ -8,6 +8,8 @@ Written in Rust, using the Axum web framework, and backed by Postgres.
 
 # Quick Start
 
+> disclaimer: work-in-progress, a lot of things are not yet finished. see the progress checklist at the end of this file.
+
 ## Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/)
@@ -102,6 +104,68 @@ The best way to interact with the Bitcoin network is to run a full node. It will
 ## bitcoind-grpc-proxy
 
 The currently existing jsonrpc and bitcoin rpc crates are not very well made, poorly documented, and impose unwanted dependencies on the project. The bitcoin core code itself is a type of C/C++ i can't navigate very well. So I wrote a grpc proxy to expose a well-typed interface to the exchange service while dealing with the bitcoin core jsonrpc interactions in a separate process.
+
+# Progress Checklist
+
+- [ ] ETH funding
+    - [ ] connect to a node and stream Tx confirmations
+    - [ ] use a local-wallet abstraction to sign messages and generate deposit addresses
+- [ ] BTC funding
+    - [ ] bitcoincore grpc proxy:
+        - [ ] rpc method: create an address
+    - [ ] create entry in tx_journal for user debit
+- [ ] settlements
+    - [ ] generate withdrawal addresses
+    - [ ] crypto withdrawal flow
+    - [ ] bundle individual settlements into one TXs
+- [ ] Database Schema
+    - [ ] table for deposit addresses
+        - [x] BTC
+        - [ ] ETH
+    - [ ] table for withdrawal addresses
+    - [x] table for user accounts
+    - [x] append-only table of order events for event sourcing
+    - [x] accounting tables for double-entry bookkeeping
+- [ ] Trading Engine
+    - [x] orderbook with price-level groupings
+    - [x] order-uuid generation & resolves to orderbook index
+    - [ ] Place Order
+        - [ ] self-trade-protection
+        - [ ] time-in-force
+            - [x] GTC
+            - [ ] GTD
+            - [x] FOK
+            - [x] IOC
+        - [ ] iceberg orders
+        - [x] market type orders
+        - [x] limit type orders
+    - [ ] Cancel Order
+    - [ ] Amend Order
+- [ ] exchange-api
+    - [x] session-token auth check for `/trade`
+    - [x] JSON content-type request body extractor
+    - [ ] msgpack content-type request body extractor
+    - [ ] user endpoints
+        - [ ] `/trade/` relm
+            - [x] POST add order
+            - [x] DELETE cancel order
+            - [ ] PATCH amend order
+        - [ ] `/session` relm
+            - [ ] POST create session
+        - [ ] `/public` relm
+            - [x] get server time
+            - [ ] get orderbook
+            - [ ] get asset pairs
+            - [ ] get market data
+    - [ ] admin endpoints
+        - [ ] get trade history
+        - [ ] get user balance
+        - [ ] resume/suspend user account
+    - [ ] operator endpoints
+        - [ ] process shutdown (immediate)
+        - [ ] process shutdown (wind-down)
+        - [ ] TE resume/suspend
+
 
 mentalfoss@gmail.com
 
