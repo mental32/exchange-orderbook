@@ -16,6 +16,8 @@ bitcoin = { version = "0.30.1", features = [
     "core2",
 ] }
 bytemuck = "1.14.0"
+chrono = "0.4.31"
+crossterm = "0.27.0"
 dotenv = "0.15.0"
 email_address = "0.2.4"
 ethers = { version = "2.0.10", features = ["ws"] }
@@ -25,6 +27,7 @@ jsonrpc-async = "2.0.2"
 mime = "0.3.17"
 prost = "0.12.1"
 rand = "0.8.5"
+ratatui = { version = "0.24.0", features = ["all-widgets"] }
 rmp = "0.8.12"
 rmp-serde = "1.1.2"
 rustc-hex = "2.1.0"
