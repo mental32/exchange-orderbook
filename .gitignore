@@ -1,4 +1,13 @@
 /.env
 /target
 /Cargo.lock
-_/
+/etc/
+!/etc/bitcoin/bitcoin.conf
+!/etc/exchange/
+!/etc/letsencrypt/
+!/etc/nginx/
+!/etc/ext.conf
+
+2023-10-22-225907_initial_structure/down.sql
+
+exchange/src/asset_feed/
