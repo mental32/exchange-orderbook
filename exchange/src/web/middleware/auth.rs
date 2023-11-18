@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use axum::extract::State;
 use axum::headers::authorization::Bearer;
-use axum::headers::{Authorization, Cookie, HeaderMapExt};
+use axum::headers::{Authorization, HeaderMapExt};
 use axum::http::{Request, StatusCode};
 use axum::middleware::Next;
 

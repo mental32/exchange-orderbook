@@ -8,23 +8,31 @@ use serde::{Deserialize, Serialize};
 use super::middleware::auth::UserUuid;
 use super::InternalApiState;
 use crate::trading::{
-    OrderSide, OrderType, OrderUuid, PlaceOrder, PlaceOrderResult, SelfTradeProtection,
-    TimeInForce, TradingEngineError as TErr,
+    OrderSide, OrderType, PlaceOrderResult, SelfTradeProtection, TimeInForce,
+    TradingEngineError as TErr,
 };
 use crate::Asset;
 
+/// The request body for the `trade_add_order` endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeAddOrder {
+    /// The side of the order.
     pub side: OrderSide,
+    /// The type of the order.
     pub order_type: OrderType,
+    /// The quantity of the order.
     pub quantity: NonZeroU32,
+    /// The price of the order.
     pub price: NonZeroU32,
+    /// The time in force of the order.
     #[serde(default)]
     pub time_in_force: TimeInForce,
+    /// The self-trade protection of the order.
     #[serde(default)]
     pub stp: SelfTradeProtection,
 }
 
+/// The response body for the `trade_add_order` endpoint.
 #[derive(Debug, Serialize)]
 pub struct TradeAddOrderResponse {
     order_uuid: uuid::Uuid,

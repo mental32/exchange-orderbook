@@ -1,57 +1,53 @@
+//! The orderbook module contains the data structures and logic for the orderbook.
+
 use std::num::NonZeroU32;
 
 use tinyvec::{tiny_vec, TinyVec};
 
 use serde::{Deserialize, Serialize};
 
+/// The side of an order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum OrderSide {
+    /// Buy side.
     #[serde(rename = "buy")]
     Buy,
+    /// Sell side.
     #[serde(rename = "sell")]
     Sell,
 }
 
+/// The type of an order.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum OrderType {
+    /// Limit order.
     #[serde(rename = "limit")]
     Limit,
+    /// Market order.
     #[serde(rename = "market")]
     Market,
 }
 
+/// The time in force of an order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Order {
+    /// Some distinct, monotonic sequence number for the order.
     pub(super) memo: u32,
+    /// The quantity of the order.
     pub(super) quantity: NonZeroU32,
+    /// The price of the order.
     pub(super) price: NonZeroU32,
 }
 
 impl Order {
-    #[inline]
-    pub fn ask(quantity: NonZeroU32, price: NonZeroU32) -> Self {
-        Self {
-            memo: 0,
-            quantity,
-            price,
-        }
-    }
-
-    #[inline]
-    pub fn bid(quantity: NonZeroU32, price: NonZeroU32) -> Self {
-        Self {
-            memo: 0,
-            quantity,
-            price,
-        }
-    }
-
+    /// Returns the quantity of the order.
     #[inline]
     pub fn quantity(&self) -> NonZeroU32 {
         self.quantity
     }
 
+    /// Returns the price of the order.
     #[inline]
     pub fn price(&self) -> NonZeroU32 {
         self.price
@@ -73,6 +69,7 @@ pub struct PriceLevel {
 }
 
 impl PriceLevel {
+    /// Returns an iterator over the [`Order`]s in the [`PriceLevel`].
     #[track_caller]
     pub fn iter(&self) -> impl Iterator<Item = &Order> + '_ {
         self.inner
@@ -213,12 +210,16 @@ pub struct OrderIndex {
     memo: u32,
 }
 
+/// The orderbook.
 pub struct Orderbook {
+    /// The bids in the orderbook.
     pub(super) bids: MultiplePriceLevels,
+    /// The asks in the orderbook.
     pub(super) asks: MultiplePriceLevels,
 }
 
 impl Orderbook {
+    /// Creates a new [`Orderbook`].
     #[inline]
     #[track_caller]
     pub fn new() -> Self {
@@ -231,6 +232,7 @@ impl Orderbook {
         Self { bids, asks }
     }
 
+    /// add a new bid to the orderbook, returns the [`OrderIndex`] for the order.
     #[inline]
     #[track_caller]
     pub fn push_bid(&mut self, t: Order) -> OrderIndex {
@@ -239,6 +241,7 @@ impl Orderbook {
         OrderIndex { side, price, memo }
     }
 
+    /// add a new ask to the orderbook, returns the [`OrderIndex`] for the order.
     #[inline]
     #[track_caller]
     pub fn push_ask(&mut self, t: Order) -> OrderIndex {
@@ -247,6 +250,7 @@ impl Orderbook {
         OrderIndex { side, price, memo }
     }
 
+    /// remove an order from the orderbook, returns the order if it existed.
     #[inline]
     #[track_caller]
     pub fn remove(&mut self, order_index: OrderIndex) -> Option<Order> {
@@ -308,6 +312,7 @@ impl Orderbook {
         }
     }
 
+    /// get a mutable reference to an order in the orderbook, returns `None` if the order does not exist.
     #[inline]
     #[track_caller]
     pub fn get_mut(&mut self, order_index: OrderIndex) -> Option<&mut Order> {

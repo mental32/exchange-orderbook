@@ -33,10 +33,7 @@ impl From<bitcoin::Address<NetworkUnchecked>> for Address {
 
 impl fmt::Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Address")
-            .field("payload", &self.0.payload)
-            .field("network", &self.0.network)
-            .finish()
+        fmt::Display::fmt(&self.0.clone().assume_checked(), f)
     }
 }
 

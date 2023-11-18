@@ -35,6 +35,7 @@ use super::proto::bitcoin_core_rpc_client::BitcoinCoreRpcClient;
 //     Ok(client)
 // }
 
+/// A bitcoin rpc client.
 #[derive(Debug, Clone)]
 pub struct BitcoinRpcClient(Inner);
 
@@ -44,6 +45,7 @@ enum Inner {
 }
 
 impl BitcoinRpcClient {
+    /// Create a new bitcoin rpc client.
     pub fn new_grpc(endpoint: Endpoint) -> impl std::future::Future<Output = Result<Self, ()>> {
         async move {
             let bitcoin_core_rpc_client = BitcoinCoreRpcClient::connect(endpoint).await.unwrap();

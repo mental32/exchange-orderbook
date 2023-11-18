@@ -1,15 +1,20 @@
+//! Pending fill operations on the [`Orderbook`].
+
 use std::num::NonZeroU32;
 
 use thiserror::Error;
 
 use super::*;
 
+/// An error that can occur when executing a pending fill operation.
 #[derive(Debug, Error)]
 pub enum ExecutePendingFillError {
+    /// The order index is invalid.
     #[error("invalid order index")]
     InvalidOrderIndex(OrderIndex),
 }
 
+/// The outcome of a fill operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FillType {
     /// The order was completely filled.
@@ -37,6 +42,7 @@ pub struct PendingFill<'a> {
 }
 
 impl<'a> PendingFill<'a> {
+    /// Create a new pending fill operation.
     pub fn new(
         orderbook: &'a mut Orderbook,
         taker: Order,
@@ -79,14 +85,20 @@ impl<'a> PendingFill<'a> {
     pub fn commit(self) -> Result<(FillType, Option<Order>), ExecutePendingFillError> {
         let mut taker_order_remaining_quantity = self.taker.quantity.get();
 
-        for (oix, order, fill_type) in dbg!(self.maker_fills) {
+        for &(oix, _, _) in &self.maker_fills {
+            if self.orderbook.get_mut(oix).is_none() {
+                return Err(ExecutePendingFillError::InvalidOrderIndex(oix));
+            }
+        }
+
+        for (oix, order, fill_type) in self.maker_fills {
             match fill_type {
                 // complete fill for a maker order.
                 FillType::Complete => {
                     let maker_order = self
                         .orderbook
                         .remove(oix)
-                        .ok_or(ExecutePendingFillError::InvalidOrderIndex(oix))?;
+                        .ok_or(ExecutePendingFillError::InvalidOrderIndex(oix))?; // this should never fail because we already checked that the order exists.
                     assert_eq!(maker_order, order);
                     // if this also filled the taker order, then we wont loop again.
                     taker_order_remaining_quantity -= maker_order.quantity.get();
@@ -96,7 +108,7 @@ impl<'a> PendingFill<'a> {
                     let maker_order = self
                         .orderbook
                         .get_mut(oix)
-                        .ok_or(ExecutePendingFillError::InvalidOrderIndex(oix))?;
+                        .ok_or(ExecutePendingFillError::InvalidOrderIndex(oix))?; // this should never fail because we already checked that the order exists.
                     assert_eq!(*maker_order, order);
                     assert!(taker_order_remaining_quantity < maker_order.quantity.get());
                     maker_order.quantity =
