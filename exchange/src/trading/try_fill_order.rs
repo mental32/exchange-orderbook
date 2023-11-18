@@ -1,7 +1,10 @@
+//! This module contains the [`try_fill_orders`] function, which attempts to fill a taker's order
+
 use std::convert::Infallible;
 
 use super::*;
 
+/// An error that can occur when attempting to fill orders.
 #[derive(Debug, thiserror::Error)]
 pub enum TryFillOrdersError {}
 

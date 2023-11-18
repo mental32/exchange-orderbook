@@ -1,9 +1,13 @@
+//! Asset types
+
 use serde::{Deserialize, Serialize};
 
 /// useful as a key in a map-like structure for when there are multiple ways to key an asset
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AssetKey {
+    /// reference by a static string (e.g. "btc" or "eth")
     Static(&'static str),
+    /// reference by the asset itself
     ByValue(Asset),
 }
 
@@ -22,7 +26,9 @@ impl From<&'static str> for AssetKey {
 /// An asset that can be traded on the exchange
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 pub enum Asset {
+    /// Bitcoin
     Bitcoin,
+    /// Ethereum
     Ether,
 }
 

@@ -1,4 +1,7 @@
-use std::{convert::Infallible, process::ExitCode, time::Duration};
+//! Support for bitcoin core rpc.
+
+use std::convert::Infallible;
+use std::time::Duration;
 
 use futures::{future::BoxFuture, FutureExt};
 
@@ -11,8 +14,12 @@ use rpc::AddressType;
 use crate::{signal::Signals, Config};
 
 pub mod proto {
+    //! Generated code for the protobuf definitions.
+    #![allow(missing_docs)]
+
     tonic::include_proto!("bitcoincore");
 
+    /// The file descriptor set for the protobuf definitions.
     pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("proto_descriptor");
 }
 
@@ -99,6 +106,7 @@ impl proto::bitcoin_core_rpc_server::BitcoinCoreRpc for BitcoinCoreRpcImpl {
     }
 }
 
+/// Start the grpc proxy server.
 pub async fn start_grpc_proxy(
     config: Config,
     signals: Signals,

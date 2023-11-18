@@ -41,21 +41,32 @@ pub type TradingEngineTx = mpsc::Sender<TradingEngineCmd>;
 /// type-alias for a [`tokio::sync::mpsc::Receiver``] that receives [TradingEngineCmd]s.
 pub type TradingEngineRx = mpsc::Receiver<TradingEngineCmd>;
 
+/// Data for placing an order.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PlaceOrder {
+    /// the asset to trade
     asset: Asset,
+    /// the user that placed the order
     user_uuid: uuid::Uuid,
+    /// the price of the order
     price: NonZeroU32,
+    /// the quantity of the order
     quantity: NonZeroU32,
+    /// the type of order
     order_type: OrderType,
+    /// the self trade protection setting
     stp: SelfTradeProtection,
+    /// the time in force setting
     time_in_force: TimeInForce,
+    /// the side of the order, buy or sell
     side: OrderSide,
 }
 
+/// type-alias for a [`tokio::sync::oneshot::Sender``] that sends [PlaceOrderResult]s.
 pub type PlaceOrderTx = oneshot::Sender<Result<PlaceOrderResult, TradingEngineError>>;
 
 impl PlaceOrder {
+    /// create a new [`PlaceOrder``]
     pub fn new(
         asset: Asset,
         user_uuid: uuid::Uuid,
@@ -79,15 +90,20 @@ impl PlaceOrder {
     }
 }
 
+/// Data for canceling an order.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CancelOrder {
+    /// the user that placed the order
     user_uuid: uuid::Uuid,
+    /// the order to cancel
     order_uuid: OrderUuid,
 }
 
+/// type-alias for a [`tokio::sync::oneshot::Sender``] that sends [Result]s.
 pub type CancelOrderTx = oneshot::Sender<Result<(), TradingEngineError>>;
 
 impl CancelOrder {
+    /// create a new [`CancelOrder``]
     pub fn new(user_uuid: uuid::Uuid, order_uuid: OrderUuid) -> Self {
         Self {
             user_uuid,
@@ -96,35 +112,58 @@ impl CancelOrder {
     }
 }
 
+/// Error that can occur when placing an order.
 #[derive(Debug, Error)]
 pub enum PlaceOrderError {
+    /// error that can occur when executing a pending fill operation.
     #[error("order was not completely filled due to insufficient liquidity")]
     FillOrKillFailed,
+    /// error that can occur when executing a pending fill operation.
     #[error("order was not completely filled due to insufficient liquidity")]
     InsufficientLiquidity,
+    /// error that can occur when executing a pending fill operation.
+    #[error("error while executing pending fill")]
+    ExecutePendingFillError(#[from] ExecutePendingFillError),
 }
 
+/// Result of placing an order.
 pub struct PlaceOrderResult {
     // original order information
+    /// the asset to trade
     pub asset: Asset,
+    /// the user that placed the order
     pub user_uuid: uuid::Uuid,
+    /// the price of the order
     pub price: NonZeroU32,
+    /// the quantity of the order
     pub quantity: NonZeroU32,
+    /// the type of order
     pub order_type: OrderType,
+    /// the self trade protection setting
     pub stp: SelfTradeProtection,
+    /// the time in force setting
     pub time_in_force: TimeInForce,
+    /// the side of the order, buy or sell
     pub side: OrderSide,
     // result of the order
+    /// the unique identifier for the order
     pub order_uuid: OrderUuid,
+    /// the index of the order in the orderbook
     pub order_index: Option<OrderIndex>,
+    /// the type of fill that occurred
     pub fill_type: FillType,
+    /// the quantity filled
     pub quantity_filled: u32,
+    /// the quantity remaining
     pub quantity_remaining: u32,
 }
 
+/// place an order
 pub fn do_place_order(
     assets: &mut Assets,
-    PlaceOrder {
+    place_order: PlaceOrder,
+) -> Result<PlaceOrderResult, TradingEngineError> {
+    let PlaceOrder {
         asset,
         user_uuid,
         price,
@@ -133,8 +172,8 @@ pub fn do_place_order(
         stp,
         time_in_force,
         side,
-    }: PlaceOrder,
-) -> Result<PlaceOrderResult, TradingEngineError> {
+    } = place_order;
+
     let asset_book = assets.match_asset_mut(asset);
 
     let taker: Order = Order {
@@ -143,10 +182,13 @@ pub fn do_place_order(
         price,
     };
 
-    // use super::try_fill_order to create a pending fill and execute it.
+    // create a pending fill and maybe execute it.
     let pending_fill = try_fill_orders(asset_book.orderbook_mut(), taker, side, order_type)
         .expect("todo: handle error");
 
+    // TODO: self trade protection
+
+    // enforce time-in-force depending on fill type.
     match (pending_fill.taker_fill_outcome(), time_in_force) {
         (FillType::Complete, _) => (), // do nothing, order was completely filled.
         (FillType::Partial, TimeInForce::GoodTilCanceled) => (), // add to orderbook as resting order.
@@ -167,6 +209,7 @@ pub fn do_place_order(
         }
     }
 
+    // commit the fill.
     match pending_fill.commit() {
         Ok((fill_type, order)) => {
             if let Some(order) = order {
@@ -199,13 +242,34 @@ pub fn do_place_order(
                     quantity_remaining: order.quantity.get(),
                 })
             } else {
-                todo!("total fill")
+                // order is None means that the order was completely filled.
+                Ok(PlaceOrderResult {
+                    asset,
+                    user_uuid,
+                    order_index: None,
+                    price,
+                    quantity,
+                    order_type,
+                    stp,
+                    time_in_force,
+                    side,
+                    order_uuid: OrderUuid::new_v4(),
+                    fill_type,
+                    quantity_filled: quantity.get(),
+                    quantity_remaining: 0,
+                })
             }
         }
-        Err(_) => todo!("error filling order"),
+        Err(err) => {
+            tracing::error!(?err, "failed to commit fill");
+            Err(TradingEngineError::from(
+                PlaceOrderError::ExecutePendingFillError(err),
+            ))
+        }
     }
 }
 
+/// cancel an order
 pub fn do_cancel_order(
     assets: &mut Assets,
     CancelOrder {
@@ -230,27 +294,37 @@ pub fn do_cancel_order(
     Ok(())
 }
 
+/// Error that can occur when interacting with the trading engine.
 #[derive(Debug, Error)]
 pub enum TradingEngineError {
+    /// the trading engine is suspended
     #[error("the trading engine is suspended")]
     Suspended,
+    /// unserializable input to trading engine
     #[error("unserializable input to trading engine")]
     UnserializableInput,
+    /// order not found
     #[error("order not found for user {0:?} and order uuid {1:?}")]
     OrderNotFound(uuid::Uuid, OrderUuid),
+    /// database error
     #[error("database error")]
     Database(#[from] sqlx::Error),
+    /// error that can occur when executing a pending fill operation.
     #[error("place order error")]
     PlaceOrder(#[from] PlaceOrderError),
 }
 
+/// payload for a trade command
 #[derive(Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum TradeCmdPayload {
+    /// place order data
     PlaceOrder(PlaceOrder),
+    /// cancel order data
     CancelOrder(CancelOrder),
 }
 
+/// enumeration of all the commands the trading engine can process.
 pub enum TradeCmd {
     /// place an order
     PlaceOrder((PlaceOrder, PlaceOrderTx)),
@@ -289,6 +363,7 @@ pub struct AssetBook {
 }
 
 impl AssetBook {
+    /// create a new asset book
     pub fn new(asset: Asset) -> Self {
         Self {
             asset,
@@ -296,14 +371,19 @@ impl AssetBook {
         }
     }
 
+    /// get the asset
     pub fn orderbook_mut(&mut self) -> &mut Orderbook {
         &mut self.orderbook
     }
 }
 
+/// multiple asset books for a trading engine.
 pub struct Assets {
+    /// map of order uuids to order indexes and assets.
     pub order_uuids: ahash::AHashMap<OrderUuid, (OrderIndex, Asset)>,
+    /// the asset book for ether
     pub eth: AssetBook,
+    /// the asset book for bitcoin
     pub btc: AssetBook,
 }
 

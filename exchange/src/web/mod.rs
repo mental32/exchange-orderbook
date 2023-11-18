@@ -1,3 +1,5 @@
+//! Webserver API for the exchange
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -31,6 +33,7 @@ mod session_delete;
 
 mod public_time;
 
+/// Error returned by the webserver.
 pub type Error = axum::Error;
 
 fn internal_server_error(message: &str) -> Response {
@@ -41,6 +44,7 @@ fn internal_server_error(message: &str) -> Response {
         .into_response()
 }
 
+/// The state of the internal API.
 #[derive(Debug, Clone)]
 pub struct InternalApiState {
     pub(crate) app_cx: crate::app_cx::AppCx,
@@ -101,6 +105,7 @@ pub fn session_routes(state: InternalApiState) -> Router {
     Router::new().route("/session", session).with_state(state)
 }
 
+/// Router for the /public path
 pub fn public_routes() -> Router {
     Router::new().route("/public/time", axum::routing::get(public_time::public_time))
 }

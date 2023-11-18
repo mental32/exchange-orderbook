@@ -1,4 +1,36 @@
+//! exchange-orderbook is an implementation of simple spot exchange. It is a single-process application that runs a webserver and a trading engine.
+//!
+//! The webserver is responsible for handling user requests and communicating with the trading engine.
+//! The trading engine is responsible for maintaining the orderbook and executing trades.
+//!
+//! # Architecture
+//!
+//! The exchange is composed of the following components:
+//!
+//! - [`web`] - the webserver
+//! - [`trading`] - the trading engine
+//! - [`bitcoin`] - the bitcoin rpc client
+//! - [`signal`] - the signal handler
+//! - [`config`] - the configuration
+//!
+//! The exchange can be started in fullstack mode using the `start_fullstack` function.
+//!
+//! # Examples
+//!
+//! ```no_run
+//!
+//! use exchange::config::Config;
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!    let config = Config::from_file("config.toml").unwrap();
+//!    let signals = exchange::signal::Signals::new().unwrap();
+//!    exchange::start_fullstack(config, signals).await.unwrap();
+//! }
+//! ```
+//!
 #![deny(unused_must_use)]
+#![deny(missing_docs)]
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -23,14 +55,19 @@ pub mod web;
 
 pub(crate) mod app_cx;
 
+/// Error returned by [`start_fullstack`].
 #[derive(Debug, Error)]
 pub enum StartFullstackError {
+    /// Error returned by the webserver.
     #[error("webserver error")]
     Webserver(#[from] web::Error),
+    /// Error returned by the database.
     #[error("database error")]
     Database(#[from] sqlx::Error),
+    /// Error returned by the bitcoin rpc client.
     #[error("bitcoin rpc error")]
     BitcoinRpc,
+    /// The exchange was interrupted.
     #[error("interrupted")]
     Interrupted,
 }

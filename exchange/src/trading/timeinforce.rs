@@ -1,5 +1,8 @@
+//! Time in force options for orders.
+
 use serde::{Deserialize, Serialize};
 
+/// Time in force options for orders.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum TimeInForce {
     /// Good Til Canceled, default. The order will remain open until it is either filled or canceled.
