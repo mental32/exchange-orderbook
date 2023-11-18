@@ -2,6 +2,7 @@
 name = "exchange"
 version = "0.1.0"
 edition = "2021"
+build = "./build.rs"
 
 [dependencies]
 ahash = "0.8.3"
@@ -40,6 +41,7 @@ tokio = { version = "1.32.0", features = ["full"] }
 tokio-tungstenite = { version = "0.20.1", features = ["native-tls-vendored"] }
 toml = "0.8.2"
 tonic = "0.10.2"
+tonic-reflection = "0.10.2"
 tower = { version = "0.4.13", features = ["full"] }
 tower-http = { version = "0.4.4", features = ["full"] }
 tracing = "0.1.37"
@@ -87,4 +89,5 @@ codegen-units = 1
 lto = true
 
 [build-dependencies]
+glob = "0.3.1"
 tonic-build = "0.10.2"

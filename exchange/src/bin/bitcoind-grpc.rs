@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv::dotenv().ok();
 
@@ -14,9 +16,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|err| Box::new(err) as Box<_>)
     };
 
-    return tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .expect("Failed building the Runtime")
-        .block_on(body);
+        .expect("Failed building the Runtime");
+    let res = runtime.block_on(body);
+    runtime.shutdown_timeout(Duration::from_secs(2));
+    res
 }

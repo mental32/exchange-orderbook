@@ -2,10 +2,26 @@ syntax = "proto3";
 
 package bitcoincore;
 
+service BitcoinCoreRpc {
+    rpc GetNewAddress(GetNewAddressRequest) returns (GetNewAddressResponse);
+    rpc GetBalance(GetNewAddressRequest) returns (GetBalanceResponse);
+}
+
+message GetBalanceRequest {
+    string address = 1;
+}
+
+message GetBalanceResponse {
+    string balance = 1;
+}
+
+message GetNewAddressRequest {
+    optional string label = 1;
+    optional string address_type = 2;
+}
+
+message GetNewAddressResponse {
+    string address = 1;
+}
 
 message EmptyRequest {}
-
-
-service BitcoinCoreRpc {
-
-}
