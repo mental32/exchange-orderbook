@@ -1,5 +1,6 @@
 use crossterm::event::KeyCode;
 use ratatui::{prelude::*, widgets::*};
+use reqwest::{header::CONTENT_TYPE, StatusCode};
 use thiserror::Error;
 
 /// # Usage
@@ -27,6 +28,21 @@ fn centered_rect(r: Rect, percent_x: u16, percent_y: u16) -> Rect {
         .split(popup_layout[1])[1]
 }
 
+fn error(text: String) -> WindowError {
+    let block = Block::new()
+        .borders(Borders::ALL)
+        .title("Alert")
+        .red()
+        .on_blue();
+
+    let notif = NotifAlertWindow {
+        block,
+        text: Paragraph::new(text).wrap(Wrap { trim: true }),
+    };
+
+    WindowError::PushWindow(Box::new(notif))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Focus {
     total: usize,
@@ -46,7 +62,7 @@ impl Focus {
     }
 
     fn focus_next_wrapping(&mut self) {
-        if self.selected == self.total {
+        if self.selected == (self.total - 1) {
             self.selected = 0;
         } else {
             self.selected += 1;
@@ -154,7 +170,7 @@ impl Window for NotifAlertWindow {
         frame.render_widget(self.text.clone(), self.block.inner(area));
     }
 
-    fn handle_events(&mut self) -> Result<(), WindowError> {
+    fn handle_events(&mut self, app: &mut App) -> Result<(), WindowError> {
         if crossterm::event::poll(std::time::Duration::from_millis(100)).unwrap() {
             // If a key event occurs, handle it
             if let crossterm::event::Event::Key(key) = crossterm::event::read().unwrap() {
@@ -162,7 +178,7 @@ impl Window for NotifAlertWindow {
                     match key.code {
                         KeyCode::Esc => return Err(WindowError::Exit),
                         KeyCode::Enter => return Err(WindowError::PopWindow),
-                        key => unimplemented!("{key:?}"),
+                        _key => (),
                     }
                 }
             }
@@ -185,7 +201,7 @@ impl MainWindow {
 }
 
 impl Window for MainWindow {
-    fn handle_events(&mut self) -> Result<(), WindowError> {
+    fn handle_events(&mut self, app: &mut App) -> Result<(), WindowError> {
         Ok(())
     }
 
@@ -204,15 +220,15 @@ struct LoginWindow {
     block: Block<'static>,
     focus: Focus,
     exchange_url: Input,
-    username: Input,
+    email: Input,
     password: Input,
 }
 
-pub const DEFAULT_EXCHANGE_API_URL: &'static str = "http://localhost:8080";
+pub const DEFAULT_EXCHANGE_API_URL: &'static str = "http://localhost:3000";
 
 impl LoginWindow {
     pub fn new() -> Box<dyn Window> {
-        fn render_username(buf: &str, style: Style, _: InputType) -> Vec<Span<'_>> {
+        fn render_email(buf: &str, style: Style, _: InputType) -> Vec<Span<'_>> {
             vec![Span::styled("username: ", style), Span::styled(buf, style)]
         }
 
@@ -229,7 +245,7 @@ impl LoginWindow {
                 String::from(DEFAULT_EXCHANGE_API_URL),
                 InputType::Text,
             ),
-            username: Input::new(render_username, String::new(), InputType::Text),
+            email: Input::new(render_email, String::from("a@b.c"), InputType::Text),
             password: Input::new(
                 |buf, style, kind| {
                     assert_eq!(kind, InputType::Password);
@@ -248,7 +264,7 @@ impl LoginWindow {
 }
 
 impl Window for LoginWindow {
-    fn handle_events(&mut self) -> Result<(), WindowError> {
+    fn handle_events(&mut self, app: &mut App) -> Result<(), WindowError> {
         // Check for user input every 250 milliseconds
         if crossterm::event::poll(std::time::Duration::from_millis(100))
             .map_err(WindowError::other)?
@@ -256,11 +272,7 @@ impl Window for LoginWindow {
             // If a key event occurs, handle it
             if let crossterm::event::Event::Key(key) = crossterm::event::read().unwrap() {
                 if key.kind == crossterm::event::KeyEventKind::Press {
-                    let mut lst = [
-                        &mut self.exchange_url,
-                        &mut self.username,
-                        &mut self.password,
-                    ];
+                    let mut lst = [&mut self.exchange_url, &mut self.email, &mut self.password];
 
                     match key.code {
                         KeyCode::Char(c) => {
@@ -282,13 +294,74 @@ impl Window for LoginWindow {
                         }
                         KeyCode::Enter => {
                             if self.focus.is_last() {
-                                return Err(WindowError::PushWindow(Box::new(NotifAlertWindow {
-                                    block: Block::new()
-                                        .borders(Borders::ALL)
-                                        .title("Alert")
-                                        .on_blue(),
-                                    text: Paragraph::new("Not implemented yet!"),
-                                })));
+                                let url = self
+                                    .exchange_url
+                                    .buf
+                                    .parse::<reqwest::Url>()
+                                    .map_err(|err| error(err.to_string()))?;
+
+                                app.exchange_url = url;
+
+                                let res = app
+                                    .http
+                                    .post(app.exchange_url.join("/session").unwrap())
+                                    .header(CONTENT_TYPE, "application/json")
+                                    .body(
+                                        serde_json::to_string(&serde_json::json! {
+                                            {
+                                                "email": self.email.buf,
+                                                "password": self.password.buf,
+                                            }
+                                        })
+                                        .unwrap(),
+                                    )
+                                    .send()
+                                    .map_err(|err| error(err.to_string()))?;
+
+                                let res = if res.status() == StatusCode::UNAUTHORIZED {
+                                    let _res = app
+                                        .http
+                                        .post(app.exchange_url.join("/user").unwrap())
+                                        .header(CONTENT_TYPE, "application/json")
+                                        .body(
+                                            serde_json::to_string(&serde_json::json! {
+                                                {
+                                                    "name": self.email.buf,
+                                                    "email": self.email.buf,
+                                                    "password": self.password.buf,
+                                                }
+                                            })
+                                            .unwrap(),
+                                        )
+                                        .send()
+                                        .map_err(|err| error(err.to_string()))?;
+
+                                    app.http
+                                        .post(app.exchange_url.join("/session").unwrap())
+                                        .header(CONTENT_TYPE, "application/json")
+                                        .body(
+                                            serde_json::to_string(&serde_json::json! {
+                                                {
+                                                    "email": self.email.buf,
+                                                    "password": self.password.buf,
+                                                }
+                                            })
+                                            .unwrap(),
+                                        )
+                                        .send()
+                                        .map_err(|err| error(err.to_string()))?
+                                } else {
+                                    res
+                                };
+
+                                if !res.status().is_success() {
+                                    return Err(error(format!(
+                                        "failed to login: {s}",
+                                        s = res.status()
+                                    )));
+                                } else {
+                                    return Err(WindowError::Exit);
+                                }
                             } else {
                                 self.focus.focus_next_wrapping();
                             }
@@ -323,7 +396,7 @@ impl Window for LoginWindow {
 
         let mut lines = vec![
             self.exchange_url.into_line(),
-            self.username.into_line(),
+            self.email.into_line(),
             self.password.into_line(),
         ];
 
@@ -341,7 +414,16 @@ impl Window for LoginWindow {
 
         let text = Paragraph::new(lines).wrap(Wrap { trim: true });
 
-        frame.render_widget(text, self.block.inner(area));
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
+            .split(self.block.inner(area));
+
+        frame.render_widget(text, layout[0]);
+        // frame.render_widget(
+        //     Paragraph::new("[esc] to quit\n[enter] to login after filling out password\nif the account doesn't exist, it will be created"),
+        //     layout[1],
+        // );
         frame.render_widget(self.block.clone(), area);
     }
 }
@@ -361,35 +443,31 @@ impl WindowError {
 
 trait Window {
     fn draw(&self, frame: &mut Frame<'_>);
-    fn handle_events(&mut self) -> Result<(), WindowError>;
-}
-
-enum Mode {
-    Login,
-    Main,
+    fn handle_events(&mut self, app: &mut App) -> Result<(), WindowError>;
 }
 
 struct App {
     windows: Vec<Box<dyn Window>>,
-    mode: Mode,
+    http: reqwest::blocking::Client,
+    exchange_url: reqwest::Url,
 }
 impl App {
-    fn draw(&self, f: &mut Frame<'_>) {
+    fn draw_all_windows(&self, f: &mut Frame<'_>) {
         for window in &self.windows {
             window.draw(f);
         }
     }
 
     fn handle_events(&mut self) -> Result<(), WindowError> {
-        if let Some(top) = self.windows.last_mut() {
-            top.handle_events()?;
+        if let Some(mut top) = self.windows.pop() {
+            let res = top.handle_events(self);
+            self.windows.push(top);
+            res
+        } else {
+            Ok(())
         }
-
-        Ok(())
     }
 }
-
-const DEFAULT_LOGIN_TEXT_FILL: usize = 32;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // startup: Enable raw mode for the terminal, giving us fine control over user input
@@ -401,7 +479,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = App {
         windows: vec![MainWindow::new(), LoginWindow::new()],
-        mode: Mode::Login,
+        http: reqwest::blocking::Client::new(),
+        exchange_url: reqwest::Url::parse(DEFAULT_EXCHANGE_API_URL)?,
     };
 
     fn main_loop<W: std::io::Write>(
@@ -409,7 +488,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         mut app: App,
     ) -> Result<(), Box<dyn std::error::Error>> {
         loop {
-            terminal.draw(|f| app.draw(f))?;
+            terminal.draw(|f| app.draw_all_windows(f))?;
             match app.handle_events() {
                 Ok(()) => continue,
                 Err(WindowError::PushWindow(window)) => {
