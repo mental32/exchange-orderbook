@@ -111,6 +111,7 @@ pub async fn session_create(
     tracing::info!(?session_token, "session created");
 
     Json(serde_json::json!( {
+        "user_id": rec.id,
         "session_token": session_token
     }))
     .into_response()
