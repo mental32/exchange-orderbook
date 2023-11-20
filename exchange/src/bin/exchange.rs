@@ -6,6 +6,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_file(true)
             .with_thread_ids(true)
             .with_line_number(true)
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
             .init();
 
         let config = exchange::Config::load_from_env();
