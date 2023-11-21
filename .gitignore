@@ -8,6 +8,9 @@
 !/etc/nginx/
 !/etc/ext.conf
 
+node_modules/
+.DS_Store
+
 2023-10-22-225907_initial_structure/down.sql
 
 exchange/src/asset_feed/

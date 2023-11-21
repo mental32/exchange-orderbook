@@ -29,6 +29,7 @@ mime = "0.3.17"
 prost = "0.12.1"
 rand = "0.8.5"
 ratatui = { version = "0.24.0", features = ["all-widgets"] }
+reqwest = { version = "0.11.22", features = ["json", "blocking"] }
 rmp = "0.8.12"
 rmp-serde = "1.1.2"
 rustc-hex = "2.1.0"

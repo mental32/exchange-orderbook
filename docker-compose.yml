@@ -27,6 +27,25 @@ services:
     restart: on-failure # Restart the service if it fails
     stop_signal: SIGINT # Stop the service gracefully
 
+  exchange-frontend:
+    image: exchange-orderbook-frontend:latest
+    build:
+      context: .
+      dockerfile: ./frontend/Dockerfile.frontend
+    environment:
+      - PORT=3030
+    ports:
+      - "3030:3030"
+    networks:
+      - exchange-net
+    depends_on:
+      - exchange
+    restart: on-failure
+    develop:
+      watch:
+        - action: rebuild
+          path: ./frontend/
+
   bitcoind-grpc-proxy:
     image: exchange-orderbook:latest
     build:

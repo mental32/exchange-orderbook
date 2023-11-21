@@ -1,0 +1,15 @@
+FROM node:21-alpine as build
+
+WORKDIR /app
+COPY ./frontend/ .
+RUN npm install
+RUN npm run build
+
+FROM node:21-alpine as deploy
+
+WORKDIR /app
+COPY --from=build /app/build ./build
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/package.json .
+EXPOSE 3030
+ENTRYPOINT [ "node", "build" ]
