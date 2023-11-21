@@ -1,0 +1,5 @@
+{
+	"devDependencies": {
+		"@sveltejs/adapter-static": "^2.0.3"
+	}
+}

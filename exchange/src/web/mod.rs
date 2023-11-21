@@ -120,6 +120,8 @@ pub fn serve(
         .merge(session_routes(state.clone()))
         .merge(public_routes());
 
+    let router = Router::new().nest("/api", router);
+
     let x_request_id = axum::http::HeaderName::from_static("x-request-id");
 
     let set_request_id_layer =
