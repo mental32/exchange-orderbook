@@ -56,11 +56,7 @@ cargo test
 
 ## Interacting
 
-You can interact with the exchange with a TUI client:
-
-```
-cargo run --bin exchange-tui
-```
+Using docker-compose to run the exchange you can then interact using the website at `https://localhost:80`
 
 # Service Architecture
 
