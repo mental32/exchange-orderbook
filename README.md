@@ -12,13 +12,15 @@ Written in Rust, using the Axum web framework, and backed by Postgres.
 
 ## Prerequisites
 
+Please ensure you have the following programs installed on the system:
+
 - [Docker](https://docs.docker.com/get-docker/)
 - [Docker Compose](https://docs.docker.com/compose/install/)
 - [Rust](https://www.rust-lang.org/tools/install)
 - [Diesel CLI](https://diesel.rs/guides/getting-started/)
 - [Protobuf Compiler](https://grpc.io/docs/protoc-installation/)
 
-## Building
+## Compiling from source (without docker)
 
 To only build the exchange and grpc-proxy executable binaries:
 
@@ -28,7 +30,7 @@ cargo build --release --bins
 
 They should be found in `target/release/exchange` and `target/release/bitcoind-grpc-proxy` respectively.
 
-## Running
+## Running (with docker)
 
 To run the exchange and grpc-proxy it is recommended to use docker-compose:
 
@@ -46,17 +48,15 @@ This will start the exchange, nginx, redis, postgres, and bitcoind and bitcoind-
 >
 > disable or comment out `testnet=1` in `etc/bitcoind/bitcoin.conf` and set `regtest=1` instead.
 
-## Testing
 
-To run built-in unit and integration tests:
+<hr>
 
-```
-cargo test
-```
-
-## Interacting
+# Interacting with the exachange
 
 Using docker-compose to run the exchange you can then interact using the website at `https://localhost:80`
+
+<hr>
+
 
 # Service Architecture
 
@@ -72,11 +72,11 @@ Also the following services have been added:
 * bitcoind, a bitcoin core node used for generating addresses and streaming transactions configured to use the testnet
 * bitcoind-grpc-proxy, a grpc server to proxy requests to bitcoind written because the bitcoin core jsonrpc api is disturbing and a well-typed grpc api is much nicer to work with
 
-## Exchange
+### Exchange
 
 The exchange service is a single-process service providing trading, funding, and account related services via a RESTful webserver API.
 
-## NGINX
+### NGINX
 
 NGINX serves as the web server and reverse proxy:
 
@@ -84,20 +84,20 @@ NGINX serves as the web server and reverse proxy:
 - **Reverse Proxy**: Routes traffic to `exchange` API instances.
 - **Future Capabilities**: Potential rate limiting implementation.
 
-## Redis
+### Redis
 
 Redis is used as a caching layer and as a message substrate between exchange replicas. The cache is used to store session
 data and other ephemeral data for the exchange API.
 
-## Postgres
+### Postgres
 
 The database is a Postgres database. Schema migrations are located in the migrations directory and are managed using the diesel migrate tool. To minimize operational risk—such as system downtime, data loss, or state incoherence between replicas—migrations are executed manually.
 
-## bitcoind (Bitcoin Core)
+### bitcoind (Bitcoin Core)
 
 The best way to interact with the Bitcoin network is to run a full node. It will index, verify, track, and manage transactions and wallets. It will also allow us to generate addresses and off-ramp BTC to users.
 
-## bitcoind-grpc-proxy
+### bitcoind-grpc-proxy
 
 The currently existing jsonrpc and bitcoin rpc crates are not very well made, poorly documented, and impose unwanted dependencies on the project. The bitcoin core code itself is a type of C/C++ i can't navigate very well. So I wrote a grpc proxy to expose a well-typed interface to the exchange service while dealing with the bitcoin core jsonrpc interactions in a separate process.
 
