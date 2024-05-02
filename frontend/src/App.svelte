@@ -3,7 +3,7 @@
 	import './app.css';
 </script>
 
-<div id="app">
+<div id="app" class="bg-[#EEECFB]">
 	<Navbar />
 	<!-- Rest of your content -->
 </div>

@@ -28,7 +28,7 @@
 	}
 </script>
 
-<div class="min-h-screen bg-gradient-to-b from-[#5841D8] to-[#D9F0FF]">
+<div class="min-h-screen bg-[#EEECFB]">
 	<Navbar />
 
 	<div class="flex justify-center items-center h-screen">
