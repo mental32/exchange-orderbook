@@ -9,6 +9,12 @@
     font-style: normal;
 }
 
+
 * {
-    font-family: 'Roboto Mono';
+    font-family: 'Helvetica Neue';
+    }
+    
+    .footer-primary-list>li {
+        padding: 3px 0 30px;
+        page-break-inside: avoid;
 }
