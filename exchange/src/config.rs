@@ -67,7 +67,7 @@ pub const REDIS_PORT: &str = "REDIS_PORT";
 pub const REDIS_PORT_DEFAULT: u16 = 6379;
 
 /// get the redis port from the environment or use the default.
-fn redis_port() -> u16 {
+pub fn redis_port() -> u16 {
     std::env::var(REDIS_PORT)
         .ok()
         .and_then(|st| {
@@ -86,39 +86,45 @@ pub const DATABASE_URL: &str = "DATABASE_URL";
 
 /// get the database url from the environment or panic.
 #[track_caller]
-fn database_url() -> String {
+pub fn database_url() -> String {
     std::env::var(DATABASE_URL).ok().unwrap_or_else(|| {
         panic!("DATABASE_URL env var not set");
     })
 }
 
 /// The string key used to check the environment variable for the config file path.
-const CONFIG_FILE_PATH: &str = "CONFIG_FILE_PATH";
+pub const CONFIG_FILE_PATH: &str = "CONFIG_FILE_PATH";
 
 /// get the config file path from the environment or None.
-fn config_file_path() -> Option<PathBuf> {
+pub fn config_file_path() -> Option<PathBuf> {
     std::env::var(CONFIG_FILE_PATH).ok().map(PathBuf::from)
 }
 
 /// The default trading engine channel capacity.
-const fn default_te_channel_capacity() -> usize {
+pub const fn default_te_channel_capacity() -> usize {
     1024
 }
 
 /// The string key used to check the environment variable for the bitcoin rpc url.
-const BITCOIN_RPC_URL: &str = "BITCOIN_RPC_URL";
+pub const BITCOIN_RPC_URL: &str = "BITCOIN_RPC_URL";
 
 /// get the bitcoin rpc url from the environment or panic.
-fn bitcoin_rpc_url() -> String {
+pub fn bitcoin_rpc_url() -> String {
     std::env::var(BITCOIN_RPC_URL).ok().unwrap_or_else(|| {
         panic!("BITCOIN_RPC_URL env var not set");
     })
 }
 
 /// the default bitcoin grpc endpoint.
-fn default_bitcoin_grpc_endpoint() -> tonic::transport::Endpoint {
+pub fn default_bitcoin_grpc_endpoint() -> tonic::transport::Endpoint {
     tonic::transport::Endpoint::from_static("http://[::1]:50051")
 }
+
+/// The string key used to check the environment variable for the bitcoin grpc bind address.
+pub const BITCOIN_GRPC_BIND_ADDR: &str = "BITCOIN_GRPC_BIND_ADDR";
+
+/// The string key used to check the environment variable for the bitcoin grpc bind address.
+pub const BITCOIN_GRPC_BIND_ADDR_DEFAULT: &str = "0.0.0.0:50051";
 
 /// deserialize a grpc endpoint from a string.
 fn de_grpc_endpoint<'de, D>(deserializer: D) -> Result<tonic::transport::Endpoint, D::Error>
@@ -272,7 +278,7 @@ impl Config {
 
     /// Get the bitcoin grpc bind address.
     pub fn bitcoin_grpc_bind_addr(&self) -> SocketAddr {
-        "0.0.0.0:50051".to_owned().parse().unwrap()
+        BITCOIN_GRPC_BIND_ADDR_DEFAULT.to_owned().parse().unwrap()
     }
 
     /// Get the bitcoin grpc endpoint.
