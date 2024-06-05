@@ -66,9 +66,19 @@ pub async fn spawn_trading_engine(config: &Config, db_pool: sqlx::PgPool) -> Spa
                 }
             };
         }
-
+        let mut running = true;
         while let Some(cmd) = rx.recv().await {
+            if !running {
+                continue;
+            }
+
             match cmd {
+                T::Suspend => {
+                    running = false;
+                }
+                T::Resume => {
+                    running = true;
+                }
                 T::Shutdown => break,
                 T::Trade(TradeCmd::PlaceOrder((place_order, response))) => {
                     let t = safely_commit_value!(

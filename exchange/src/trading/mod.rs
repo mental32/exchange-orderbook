@@ -336,6 +336,10 @@ pub enum TradeCmd {
 pub enum TradingEngineCmd {
     /// a signal to shutdown the trading engine
     Shutdown,
+    /// suspend the engine
+    Suspend,
+    /// resume the engine if suspended
+    Resume,
     /// a trade command like placing an order or canceling an order.
     Trade(TradeCmd),
     /// a trade command deserialized from json used to initialize the trading engine.
