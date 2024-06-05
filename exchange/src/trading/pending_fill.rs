@@ -25,20 +25,30 @@ pub enum FillType {
     None,
 }
 
+/// a potential fill result from a maker order
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub struct MakerFill {
+    pub oix: OrderIndex,
+    pub maker: Order,
+    pub fill_type: FillType,
+    pub fill_amount: u32,
+}
+
 /// A pending fill operation on the [`Orderbook`].
 pub struct PendingFill<'a> {
     // capturing the orderbook by mutable reference enforces that the data in the pending-fill does not drift from the orderbook data.
-    orderbook: &'a mut Orderbook,
+    pub(super) orderbook: &'a mut Orderbook,
     /// The taker's order.
-    taker: Order,
+    pub(super) taker: Order,
     /// The side of the taker's order.
-    side: OrderSide,
+    pub(super) side: OrderSide,
     /// The order type of the taker's order.
-    order_type: OrderType,
+    pub(super) order_type: OrderType,
     /// The maker orders that were filled from this taker fill operation.
-    maker_fills: Vec<(OrderIndex, Order, FillType)>,
+    pub(super) maker_fills: Vec<MakerFill>,
     /// The outcome of the fill operation for the taker's order.
-    taker_fill_outcome: FillType,
+    pub(super) taker_fill_outcome: FillType,
 }
 
 impl<'a> PendingFill<'a> {
@@ -48,7 +58,7 @@ impl<'a> PendingFill<'a> {
         taker: Order,
         side: OrderSide,
         order_type: OrderType,
-        maker_fills: Vec<(OrderIndex, Order, FillType)>,
+        maker_fills: Vec<MakerFill>,
         taker_fill_outcome: FillType,
     ) -> Self {
         Self {
@@ -85,13 +95,13 @@ impl<'a> PendingFill<'a> {
     pub fn commit(self) -> Result<(FillType, Option<Order>), ExecutePendingFillError> {
         let mut taker_order_remaining_quantity = self.taker.quantity.get();
 
-        for &(oix, _, _) in &self.maker_fills {
-            if self.orderbook.get_mut(oix).is_none() {
-                return Err(ExecutePendingFillError::InvalidOrderIndex(oix));
+        for fill in &self.maker_fills {
+            if self.orderbook.get_mut(fill.oix).is_none() {
+                return Err(ExecutePendingFillError::InvalidOrderIndex(fill.oix));
             }
         }
 
-        for (oix, order, fill_type) in self.maker_fills {
+        for MakerFill { oix, maker: order, fill_type, .. } in self.maker_fills {
             match fill_type {
                 // complete fill for a maker order.
                 FillType::Complete => {
