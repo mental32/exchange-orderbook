@@ -14,14 +14,14 @@ pub struct SpawnTradingEngine {
 impl SpawnTradingEngine {
     pub async fn initialize_trading_engine(
         self,
-        db_pool: sqlx::PgPool,
+        db: sqlx::PgPool,
     ) -> Result<(trading::TradingEngineTx, tokio::task::JoinHandle<()>), sqlx::Error> {
         let Self { input, handle } = self;
 
         // stream out rows from the orders_event_source table, deserialize them into TradeCmds
         // and send them to the trading engine for processing.
         let mut stream =
-            sqlx::query!(r#"SELECT id, jstr FROM orders_event_source"#,).fetch(&db_pool);
+            sqlx::query!(r#"SELECT id, jstr FROM orders_event_source"#,).fetch(&db);
 
         while let Some(row) = stream.next().await {
             let row = row?;
