@@ -402,6 +402,8 @@ impl Assets {
 
 #[cfg(test)]
 mod tests {
+    use uuid::Uuid;
+
     use crate::spawn_trading_engine::{spawn_trading_engine, SpawnTradingEngine};
     use crate::Config;
 
@@ -419,8 +421,28 @@ mod tests {
         te.input.send(TradingEngineCmd::Shutdown).await.unwrap();
         te.handle.await.unwrap();
     }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_place_order(db: sqlx::PgPool) {
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+        let (_config, te) = trading_engine_fixture(db).await;
+        let (tx, rx) = oneshot::channel();
+        let order = PlaceOrder {
+            asset: Asset::Bitcoin,
+            user_uuid: Uuid::new_v4(),
+            price: NonZeroU32::new(1).unwrap(),
+            quantity: NonZeroU32::new(1).unwrap(),
+            order_type: OrderType::Market,
+            stp: SelfTradeProtection::CancelOldest,
+            time_in_force: TimeInForce::GoodTilCanceled,
+            side: OrderSide::Buy,
+        };
+        te.input
+            .send(TradingEngineCmd::Trade(TradeCmd::PlaceOrder((order, tx))))
             .await
             .unwrap();
-        spawn_trading_engine.handle.await.unwrap();
+        let PlaceOrderResult { asset, .. } = rx.await.unwrap().unwrap();
+        assert_eq!(asset, Asset::Bitcoin);
     }
 }

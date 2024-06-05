@@ -158,8 +158,11 @@ pub struct Config {
     eth_wallet_mnemonic: Option<String>,
     #[serde(default = "bitcoin_rpc_url")]
     bitcoin_rpc_url: String,
+    #[serde(default)]
     bitcoin_rpc_auth_user: String,
+    #[serde(default)]
     bitcoin_rpc_auth_password: String,
+    #[serde(default)]
     bitcoin_wallet_name: String,
     #[serde(
         deserialize_with = "de_grpc_endpoint",

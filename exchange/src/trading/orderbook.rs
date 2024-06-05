@@ -266,8 +266,8 @@ impl Orderbook {
 
     /// construct an iterator of the side of the book specified, the ordering is relative depending on the side specified.
     ///
-    /// * [`OrderSide::Buy`] - lowest price to highest
-    /// * [`OrderSide::Sell`] - highest price to lowest
+    /// * [`OrderSide::Buy`] - highest price to lowest (for selling)
+    /// * [`OrderSide::Sell`] - lowest price to highest (for buying)
     ///
     pub fn iter_rel(&self, side: OrderSide) -> impl Iterator<Item = (OrderIndex, Order)> + '_ {
         enum Either<L, R> {
@@ -307,8 +307,8 @@ impl Orderbook {
         }
 
         match side {
-            OrderSide::Buy => Either::Left(wrap_iter(side, self.bids.iter_inner())),
-            OrderSide::Sell => Either::Right(wrap_iter(side, self.asks.iter_inner_rev())),
+            OrderSide::Buy => Either::Left(wrap_iter(side, self.bids.iter_inner_rev())),
+            OrderSide::Sell => Either::Right(wrap_iter(side, self.asks.iter_inner())),
         }
     }
 
