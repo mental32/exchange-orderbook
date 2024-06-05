@@ -5,7 +5,7 @@
 </script>
 
 <div id="app" class="bg-white">
-	<div class="relative z-[1000]">
+	<div class="relative z-[1000] h-[1rem]">
 		<div
 			class=" bg-[#CFCCFF] flex justify-center px-[20px] py-[8px] sm:leading-[20px] sm:text-[length:var(--body-font-size)] leading-[16px] text-[length:var(--body-font-size-sm)] [&amp;_strong]:font-bold [&amp;_a]:underline hover:[&amp;_a]:underline text-[#000000] [&amp;_a]:text-[#7132F5] border-b-[#CDCDCD] border-b border-solid font-['GT_Standard_S'] fixed top-0 left-0 right-0"
 			style="--body-font-size:15px;--body-font-size-sm:14"
@@ -23,7 +23,6 @@
 				>
 			</div>
 		</div>
-		<div style="height: 57px;"></div>
 	</div>
 	<div class="px-0">
 		<Navbar />
