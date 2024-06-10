@@ -4,12 +4,12 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
-use axum::response::IntoResponse;
-use axum::response::Response;
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use axum::Router;
-use axum::ServiceExt;
+use axum::{Router, ServiceExt};
 
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
@@ -20,6 +20,9 @@ use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetReques
 mod middleware;
 
 mod trade_add_order;
+use tower_http::timeout::TimeoutLayer;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tower_http::{LatencyUnit, ServiceBuilderExt};
 pub use trade_add_order::TradeAddOrder;
 mod trade_cancel_order;
 mod trade_edit_order;
@@ -35,7 +38,13 @@ mod session_delete;
 mod public_time;
 
 /// Error returned by the webserver.
-pub type Error = axum::Error;
+#[derive(Debug, thiserror::Error)]
+pub enum ServeError {
+    #[error("axum: {0}")]
+    Axum(axum::Error),
+    #[error("io: {0}")]
+    Io(std::io::Error),
+}
 
 fn internal_server_error(message: &str) -> Response {
     (
@@ -114,31 +123,50 @@ pub fn public_routes() -> Router {
 pub fn serve(
     address: SocketAddr,
     state: InternalApiState,
-) -> impl Future<Output = Result<(), Error>> {
+) -> impl Future<Output = Result<(), ServeError>> {
+    let x_request_id = axum::http::HeaderName::from_static("x-request-id");
+
+    let set_request_id_layer =
+        SetRequestIdLayer::new(x_request_id.clone(), MakeRequestUuid::default());
+
+    let sensitive_headers: Arc<[_]> = vec![header::AUTHORIZATION, header::COOKIE].into();
+    let middleware = ServiceBuilder::new()
+    // Mark the `Authorization` and `Cookie` headers as sensitive so it doesn't show in logs
+    .sensitive_request_headers(sensitive_headers.clone())
+    // Add high level tracing/logging to all requests
+    .layer(
+        TraceLayer::new_for_http()
+            .on_body_chunk(|chunk: &axum::body::Bytes, latency: Duration, _: &tracing::Span| {
+                tracing::trace!(size_bytes = chunk.len(), latency = ?latency, "sending body chunk")
+            })
+            .make_span_with(DefaultMakeSpan::new().include_headers(true))
+            .on_response(DefaultOnResponse::new().include_headers(true).latency_unit(LatencyUnit::Micros)),
+    )
+    .sensitive_response_headers(sensitive_headers)
+    // Set a timeout
+    .layer(TimeoutLayer::new(Duration::from_secs(10)))
+    // Set x-request-id for response headers.
+    .layer(set_request_id_layer)
+    .layer(NormalizePathLayer::trim_trailing_slash())
+    .layer(PropagateRequestIdLayer::new(x_request_id))
+    // Compress responses
+    .compression();
+
     let router = trade_routes(state.clone())
         .merge(user_routes(state.clone()))
         .merge(session_routes(state.clone()))
         .merge(public_routes());
 
-    let router = Router::new().nest("/api", router);
-
-    // let x_request_id = axum::http::HeaderName::from_static("x-request-id");
-
-    // // let set_request_id_layer =
-    // //     SetRequestIdLayer::new(x_request_id.clone(), MakeRequestUuid::default());
-
-    // let app = ServiceBuilder::new()
-    //     // .layer(set_request_id_layer)
-    //     .layer(tower_http::trace::TraceLayer::new_for_http())
-    //     .layer(NormalizePathLayer::trim_trailing_slash())
-    //     // .layer(PropagateRequestIdLayer::new(x_request_id))
-    //     .service(router);
+    let router = Router::new().nest("/api", router).layer(middleware);
 
     async move {
-        let lst = TcpListener::bind(&address).await.unwrap();
+        let lst = TcpListener::bind(&address).await?;
         let app = axum::serve(lst, router.into_make_service());
         tracing::info!(?address, "Serving webserver API");
-        let rval = app.await.map_err(Error::new);
+        let rval = app
+            .await
+            .map_err(axum::Error::new)
+            .map_err(ServeError::Axum);
         tracing::warn!(?address, "Stopping webserver!");
         rval
     }
