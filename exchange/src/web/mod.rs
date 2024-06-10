@@ -11,6 +11,7 @@ use axum::routing::post;
 use axum::Router;
 use axum::ServiceExt;
 
+use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 
 use tower_http::normalize_path::NormalizePathLayer;
@@ -48,7 +49,6 @@ fn internal_server_error(message: &str) -> Response {
 #[derive(Debug, Clone)]
 pub struct InternalApiState {
     pub(crate) app_cx: crate::app_cx::AppCx,
-    pub(crate) redis: redis::Client,
     pub(crate) assets: Arc<HashMap<crate::asset::AssetKey, crate::Asset>>,
 }
 
@@ -69,7 +69,7 @@ pub fn trade_routes(state: InternalApiState) -> Router {
         .route("/trade/:asset/order", trade_order)
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            middleware::validate_session_token_redis,
+            middleware::validate_session_token,
         ))
         .with_state(state)
 }
@@ -122,21 +122,21 @@ pub fn serve(
 
     let router = Router::new().nest("/api", router);
 
-    let x_request_id = axum::http::HeaderName::from_static("x-request-id");
+    // let x_request_id = axum::http::HeaderName::from_static("x-request-id");
 
-    let set_request_id_layer =
-        SetRequestIdLayer::new(x_request_id.clone(), MakeRequestUuid::default());
+    // // let set_request_id_layer =
+    // //     SetRequestIdLayer::new(x_request_id.clone(), MakeRequestUuid::default());
 
-    let app = ServiceBuilder::new()
-        .layer(set_request_id_layer)
-        .layer(tower_http::trace::TraceLayer::new_for_http())
-        .layer(NormalizePathLayer::trim_trailing_slash())
-        .layer(PropagateRequestIdLayer::new(x_request_id))
-        .service(router);
-
-    let app = axum::Server::bind(&address).serve(app.into_make_service());
+    // let app = ServiceBuilder::new()
+    //     // .layer(set_request_id_layer)
+    //     .layer(tower_http::trace::TraceLayer::new_for_http())
+    //     .layer(NormalizePathLayer::trim_trailing_slash())
+    //     // .layer(PropagateRequestIdLayer::new(x_request_id))
+    //     .service(router);
 
     async move {
+        let lst = TcpListener::bind(&address).await.unwrap();
+        let app = axum::serve(lst, router.into_make_service());
         tracing::info!(?address, "Serving webserver API");
         let rval = app.await.map_err(Error::new);
         tracing::warn!(?address, "Stopping webserver!");

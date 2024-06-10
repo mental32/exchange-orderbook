@@ -13,30 +13,19 @@
 //! - [`signal`] - the signal handler
 //! - [`config`] - the configuration
 //!
-//! The exchange can be started in fullstack mode using the `start_fullstack` function.
-//!
-//! # Examples
-//!
-//! ```no_run
-//!
-//! use exchange::config::Config;
-//!
-//! #[tokio::main]
-//! async fn main() {
-//!    let config = Config::from_file("config.toml").unwrap();
-//!    let signals = exchange::signal::Signals::new().unwrap();
-//!    exchange::start_fullstack(config, signals).await.unwrap();
-//! }
-//! ```
+//! The exchange can be started in fullstack mode using the `start_everything` function.
 //!
 #![deny(unused_must_use)]
 #![deny(missing_docs)]
+#![allow(warnings)]
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
 use thiserror::Error;
+
+pub mod test;
 
 pub mod config;
 pub use config::Config;
@@ -101,8 +90,6 @@ pub fn start_fullstack(
         return std::future::pending();
     }
 
-    let redis = redis::Client::open(config.redis_url()).expect("Failed to open redis client");
-
     async move {
         tracing::debug!(
             config = ?config,
@@ -111,7 +98,7 @@ pub fn start_fullstack(
 
         tracing::info!(url = ?config.database_url(), "connecting to database");
 
-        let db_pool = sqlx::postgres::PgPoolOptions::new()
+        let db = sqlx::postgres::PgPoolOptions::new()
             .max_connections(20)
             .min_connections(1)
             .connect(&config.database_url())
@@ -129,15 +116,14 @@ pub fn start_fullstack(
             .map_err(|_| StartFullstackError::BitcoinRpc)?;
 
         let (te_tx, mut te_handle) =
-            spawn_trading_engine::spawn_trading_engine(&config, db_pool.clone())
+            spawn_trading_engine::spawn_trading_engine(&config, db.clone())
                 .await
-                .initialize_trading_engine(db_pool.clone())
+                .initialize_trading_engine(db.clone())
                 .await?;
 
         let assets = Arc::new(HashMap::from_iter(asset::internal_asset_list()));
         let state = web::InternalApiState {
-            app_cx: AppCx::new(te_tx.clone(), btc_rpc, db_pool),
-            redis,
+            app_cx: AppCx::new(te_tx.clone(), btc_rpc, db),
             assets,
         };
 
