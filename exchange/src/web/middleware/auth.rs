@@ -1,13 +1,16 @@
 use std::str::FromStr;
 
+use axum::body::Body;
 use axum::extract::State;
-use axum::headers::authorization::Bearer;
-use axum::headers::{Authorization, HeaderMapExt};
+use axum_extra::headers::authorization::Bearer;
+use axum_extra::headers::{Authorization, HeaderMapExt};
 use axum::http::{Request, StatusCode};
 use axum::middleware::Next;
 
 use axum::response::IntoResponse;
-use redis::AsyncCommands;
+use axum_extra::extract::CookieJar;
+use chrono::{Datelike, Timelike};
+use sqlx::types::time::{Date, PrimitiveDateTime, Time};
 
 use crate::web::InternalApiState;
 
@@ -15,49 +18,66 @@ use crate::web::InternalApiState;
 #[derive(Debug, Clone)]
 pub struct UserUuid(pub uuid::Uuid);
 
-/// Check if the request has a session-token cookie which is a
-/// 32-byte hex string that should be a key in Redis with the format
-/// session:{session-token} and the value should be the user ID (UUID)
-pub async fn validate_session_token_redis<B>(
+/// Enforce that the request has a session-token cookie
+///
+/// * A session-token cookie is a randomly generated 32-byte hex-encoded string.
+/// * session-token cookies can expire which is checked here.
+///
+/// If the checks pass a [`UserUuid`] extension will be added to the request
+/// which specifies the user id of the requester.
+///
+pub async fn validate_session_token(
     State(state): State<InternalApiState>,
-    mut request: Request<B>,
-    next: Next<B>,
+    // jar: CookieJar,
+    mut request: Request<Body>,
+    next: Next,
 ) -> axum::response::Response {
-    // Attempt to get a Redis connection from the pool
-    let mut conn = match state.redis.get_async_connection().await {
-        Ok(conn) => conn,
-        Err(_) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
-        }
-    };
-
     // Extract the session-token cookie from the request headers
-    let session_token = match request.headers().typed_get::<Authorization<Bearer>>() {
-        Some(auth) => auth.0.token().to_string(),
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                "Unauthorized: session-token cookie missing",
-            )
-                .into_response();
+    let jar = CookieJar::from_headers(request.headers());
+    let session_token = if let Some(t) = jar.get("session-token") {
+        t.value_trimmed()
+    } else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "Unauthorized: session-token cookie missing",
+        )
+            .into_response();
+    };
+
+    let rec = match sqlx::query!(
+        "SELECT * FROM session_tokens WHERE token = $1",
+        session_token.as_bytes()
+    )
+    .fetch_optional(&state.app_cx.db_pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(err) => {
+            tracing::error!(?err, "session-token select failure");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Try again later").into_response();
         }
     };
 
-    // Query Redis to validate the session token
-    let redis_key = format!("session:{}", session_token);
-    let user_id = conn
-        .get(&redis_key)
-        .await
-        .unwrap_or(None)
-        .map(|st: String| uuid::Uuid::from_str(&st));
+    match rec {
+        Some(rec) => {
+            let now = chrono::Utc::now();
+            let now_d = Date::from_ordinal_date(now.year(), now.ordinal() as _).unwrap();
+            let now_t =
+                Time::from_hms(now.hour() as _, now.minute() as _, now.second() as _).unwrap();
 
-    match user_id {
-        Some(Ok(uuid)) => {
+            if (now_d > rec.expires_at.date()) && (now_t >= rec.expires_at.time()) {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    "Unauthorized: session-token has expired",
+                )
+                    .into_response();
+            }
+
             // Session token is valid; proceed to the next middleware or handler
-            request.extensions_mut().insert(UserUuid(uuid));
+            request.extensions_mut().insert(UserUuid(rec.user_id));
             next.run(request).await
         }
-        None | Some(Err(_)) => {
+        None => {
             // Session token is invalid; return an unauthorized error
             (
                 StatusCode::UNAUTHORIZED,

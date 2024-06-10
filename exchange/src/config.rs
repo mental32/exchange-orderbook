@@ -3,8 +3,6 @@
 //! The exchange is configured using a config file. The config file is a toml file that contains the following fields:
 //!
 //! - `webserver_address` - the address to bind the webserver to
-//! - `redis_host` - the redis host to connect to
-//! - `redis_port` - the redis port to connect to
 //! - `database_url` - the database url to connect to
 //! - `config_file_path` - the path to the config file
 //! - `te_channel_capacity` - the trading engine channel capacity
@@ -45,40 +43,6 @@ fn webserver_address() -> SocketAddr {
                 .ok()
         })
         .unwrap_or(WEBSERVER_ADDRESS_DEFAULT)
-}
-
-/// The string key used to check the environment variable for the redis host.
-pub const REDIS_HOST: &str = "REDIS_HOST";
-
-/// The default redis host.
-pub const REDIS_HOST_DEFAULT: &str = "127.0.0.1";
-
-/// get the redis host from the environment or use the default.
-fn redis_host() -> String {
-    std::env::var(REDIS_HOST)
-        .ok()
-        .unwrap_or_else(|| REDIS_HOST_DEFAULT.to_owned())
-}
-
-/// The string key used to check the environment variable for the redis port.
-pub const REDIS_PORT: &str = "REDIS_PORT";
-
-/// The default redis port.
-pub const REDIS_PORT_DEFAULT: u16 = 6379;
-
-/// get the redis port from the environment or use the default.
-pub fn redis_port() -> u16 {
-    std::env::var(REDIS_PORT)
-        .ok()
-        .and_then(|st| {
-            st.parse()
-                .map_err(|err| {
-                    tracing::warn!(?err, "Failed to parse REDIS_PORT env var");
-                    err
-                })
-                .ok()
-        })
-        .unwrap_or(REDIS_PORT_DEFAULT)
 }
 
 /// The string key used to check the environment variable for the database url.
@@ -151,10 +115,6 @@ where
 pub struct Config {
     #[serde(default = "webserver_address")]
     webserver_address: SocketAddr,
-    #[serde(default = "redis_host")]
-    redis_host: String,
-    #[serde(default = "redis_port")]
-    redis_port: u16,
     #[serde(default = "database_url")]
     database_url: String,
     #[serde(default = "config_file_path")]
@@ -219,7 +179,7 @@ impl Config {
             };
         }
 
-        diff!(webserver_address, redis_host, redis_port, database_url);
+        diff!(webserver_address, database_url);
 
         map
     }
@@ -227,16 +187,6 @@ impl Config {
     /// Get the webserver address to bind to.
     pub fn webserver_address(&self) -> SocketAddr {
         self.webserver_address
-    }
-
-    /// Get the redis url to connect to.
-    pub fn redis_url(&self) -> String {
-        let Self {
-            redis_host,
-            redis_port,
-            ..
-        } = self;
-        format!("redis://{redis_host}:{redis_port}")
     }
 
     /// Get the database url to connect to.

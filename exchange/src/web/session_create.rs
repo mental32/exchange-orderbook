@@ -4,12 +4,15 @@ use std::str::FromStr;
 use argon2::password_hash::PasswordHashString;
 use argon2::{Argon2, PasswordVerifier};
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::http::header::{CONTENT_TYPE, SET_COOKIE};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::response::{AppendHeaders, IntoResponse, IntoResponseParts, Response};
 use axum::Json;
-
+use axum_extra::extract::cookie::{self, Cookie};
+use axum_extra::extract::CookieJar;
 use email_address::EmailAddress;
 use serde::{Deserialize, Serialize};
+use sqlx::types::time::PrimitiveDateTime;
 
 use super::InternalApiState;
 
@@ -38,6 +41,7 @@ pub struct SessionCreate {
 
 pub async fn session_create(
     State(state): State<InternalApiState>,
+    jar: CookieJar,
     Json(body): Json<SessionCreate>,
 ) -> Response {
     tracing::trace!(?body, "session_create");
@@ -86,7 +90,7 @@ pub async fn session_create(
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
-    // generate a session token and store it in redis
+    // generate a session token and store it
     let session_token = {
         let mut rng = rand::thread_rng();
         let mut bytes = [0u8; 32];
@@ -94,25 +98,28 @@ pub async fn session_create(
         hex::encode(bytes)
     };
 
-    let session_token_key = format!("session:{}", session_token);
-
-    let mut conn = state.redis.get_async_connection().await.unwrap();
-
-    let () = redis::cmd("SET")
-        .arg(session_token_key)
-        .arg(rec.id.to_string())
-        .arg("NX") // only set if it doesn't exist
-        .arg("EX") // expire after
-        .arg(24 * 60 * 60) // 24 hours
-        .query_async(&mut conn)
-        .await
-        .unwrap();
+    if let Err(err) = sqlx::query!(
+        "INSERT INTO session_tokens (token, expires_at, user_id) VALUES ($1, $2, $3);",
+        session_token.as_bytes(),
+        PrimitiveDateTime::MAX,
+        rec.id,
+    )
+    .execute(&state.app_cx.db_pool)
+    .await
+    {
+        tracing::error!(?err, "session_token insert failure");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
 
     tracing::info!(?session_token, "session created");
 
-    Json(serde_json::json!( {
-        "user_id": rec.id,
-        "session_token": session_token
-    }))
-    .into_response()
+    let session_token_cookie = Cookie::build(("session-token", session_token.as_str()))
+        .max_age(time::Duration::hours(1))
+        .to_string();
+
+    (
+        AppendHeaders([(SET_COOKIE, session_token_cookie)]),
+        StatusCode::CREATED,
+    )
+        .into_response()
 }
