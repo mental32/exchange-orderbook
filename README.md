@@ -147,7 +147,7 @@ The currently existing jsonrpc and bitcoin rpc crates are not very well made, po
             - [x] DELETE cancel order
             - [ ] PATCH amend order
         - [ ] `/session` relm
-            - [ ] POST create session
+            - [x] POST create session
         - [ ] `/public` relm
             - [x] get server time
             - [ ] get orderbook

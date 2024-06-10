@@ -82,16 +82,6 @@ services:
       - exchange
     restart: always
 
-  redis:
-    image: redis:latest
-    ports:
-      - "6379:6379" # Expose Redis ports for debugging
-    networks:
-      - exchange-net
-    volumes:
-      - redis-data:/data
-    restart: always
-
   postgres:
     image: postgres:latest
     ports:

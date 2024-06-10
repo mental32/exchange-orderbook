@@ -14,15 +14,15 @@ pub struct SessionDelete {
 
 #[derive(Debug, Error)]
 pub enum SessionDeleteError {
-    #[error("redis error")]
-    Redis(#[from] redis::RedisError),
+    #[error("sqlx error")]
+    Sqlx(#[from] sqlx::Error),
 }
 
 impl IntoResponse for SessionDeleteError {
     fn into_response(self) -> axum::response::Response {
         match self {
-            SessionDeleteError::Redis(err) => {
-                tracing::error!(?err, "redis error");
+            SessionDeleteError::Sqlx(err) => {
+                tracing::error!(?err, "sqlx error");
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
         }
@@ -35,34 +35,28 @@ pub async fn session_delete(
 ) -> Result<StatusCode, SessionDeleteError> {
     tracing::trace!("session_delete");
 
-    let mut conn = state.redis.get_async_connection().await?;
+    let rec = sqlx::query!(
+        "
+    WITH deleted_token AS (
+        DELETE FROM session_tokens
+        WHERE token = $1
+        RETURNING *
+    )
+    SELECT * FROM deleted_token;
+    ",
+        session_token.as_bytes()
+    )
+    .fetch_optional(&state.app_cx.db_pool)
+    .await?;
 
-    let uuid: redis::Value = redis::cmd("GETDEL")
-        .arg(format!("session:{session_token}"))
-        .query_async(&mut conn)
-        .await?;
-
-    match uuid {
-        redis::Value::Nil => {
+    match rec {
+        None => {
             tracing::info!(?session_token, "session not found");
             Ok(StatusCode::NOT_FOUND)
         }
-        redis::Value::Data(bytes) => {
-            let uuid = String::from_utf8(bytes).map_err(|_| {
-                SessionDeleteError::Redis(redis::RedisError::from((
-                    redis::ErrorKind::TypeError,
-                    "redis data response was not a utf-8 string",
-                )))
-            })?;
-            tracing::info!(?uuid, ?session_token, "session deleted");
+        Some(rec) => {
+            tracing::info!(uuid = ?rec.user_id, ?session_token, "session deleted");
             Ok(StatusCode::NO_CONTENT)
-        }
-        _ => {
-            tracing::error!("unexpected redis response");
-            Err(SessionDeleteError::Redis(redis::RedisError::from((
-                redis::ErrorKind::TypeError,
-                "unexpected redis response",
-            ))))
         }
     }
 }

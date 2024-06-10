@@ -169,11 +169,11 @@ impl<T, E> Response<T, E> {
 }
 
 impl AppCx {
-    pub fn new(te_tx: TradingEngineTx, btc_rpc: BitcoinRpcClient, db_pool: sqlx::PgPool) -> Self {
+    pub fn new(te_tx: TradingEngineTx, btc_rpc: BitcoinRpcClient, db: sqlx::PgPool) -> Self {
         Self {
             te_tx,
             bitcoind_rpc: btc_rpc,
-            db_pool,
+            db_pool: db,
             inner_ro: Arc::new(Inner {
                 te_state: Atomic::new(TradingEngineState::Running),
             }),
