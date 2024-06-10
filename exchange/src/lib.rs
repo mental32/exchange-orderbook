@@ -49,7 +49,7 @@ pub(crate) mod app_cx;
 pub enum StartFullstackError {
     /// Error returned by the webserver.
     #[error("webserver error")]
-    Webserver(#[from] web::Error),
+    Webserver(#[from] web::ServeError),
     /// Error returned by the database.
     #[error("database error")]
     Database(#[from] sqlx::Error),

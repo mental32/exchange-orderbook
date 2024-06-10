@@ -39,11 +39,12 @@ mod public_time;
 
 /// Error returned by the webserver.
 #[derive(Debug, thiserror::Error)]
+#[allow(missing_docs)]
 pub enum ServeError {
     #[error("axum: {0}")]
-    Axum(axum::Error),
+    Axum(#[from] axum::Error),
     #[error("io: {0}")]
-    Io(std::io::Error),
+    Io(#[from] std::io::Error),
 }
 
 fn internal_server_error(message: &str) -> Response {
