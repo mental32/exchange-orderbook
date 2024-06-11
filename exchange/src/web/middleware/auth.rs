@@ -2,14 +2,14 @@ use std::str::FromStr;
 
 use axum::body::Body;
 use axum::extract::State;
-use axum_extra::headers::authorization::Bearer;
-use axum_extra::headers::{Authorization, HeaderMapExt};
 use axum::http::{Request, StatusCode};
 use axum::middleware::Next;
+use axum_extra::headers::authorization::Bearer;
+use axum_extra::headers::{Authorization, HeaderMapExt};
 
 use axum::response::IntoResponse;
 use axum_extra::extract::CookieJar;
-use chrono::{Datelike, Timelike};
+use chrono::{Datelike, TimeZone, Timelike};
 use sqlx::types::time::{Date, PrimitiveDateTime, Time};
 
 use crate::web::InternalApiState;
@@ -48,7 +48,7 @@ pub async fn validate_session_token(
         "SELECT * FROM session_tokens WHERE token = $1",
         session_token.as_bytes()
     )
-    .fetch_optional(&state.app_cx.db_pool)
+    .fetch_optional(&state.app_cx.db())
     .await
     {
         Ok(r) => r,
@@ -61,11 +61,13 @@ pub async fn validate_session_token(
     match rec {
         Some(rec) => {
             let now = chrono::Utc::now();
-            let now_d = Date::from_ordinal_date(now.year(), now.ordinal() as _).unwrap();
-            let now_t =
-                Time::from_hms(now.hour() as _, now.minute() as _, now.second() as _).unwrap();
+            let expires = chrono::DateTime::from_timestamp(
+                rec.created_at.assume_utc().unix_timestamp() + (rec.max_age as i64),
+                0,
+            )
+            .unwrap();
 
-            if (now_d > rec.expires_at.date()) && (now_t >= rec.expires_at.time()) {
+            if now >= expires {
                 return (
                     StatusCode::UNAUTHORIZED,
                     "Unauthorized: session-token has expired",
