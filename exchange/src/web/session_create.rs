@@ -46,7 +46,7 @@ pub async fn session_create(
 ) -> Response {
     tracing::trace!(?body, "session_create");
 
-    let db = state.app_cx.db_pool.clone();
+    let db = state.app_cx.db();
 
     let rec = match sqlx::query!(
         // language=PostgreSQL
@@ -70,7 +70,7 @@ pub async fn session_create(
         }
     };
 
-    tracing::info!(?rec, "user found");
+    tracing::info!(user_id = ?rec.id, "user found");
 
     if tokio::task::spawn_blocking({
         let from_utf8 = &String::from_utf8(rec.password_hash).unwrap();
@@ -99,12 +99,12 @@ pub async fn session_create(
     };
 
     if let Err(err) = sqlx::query!(
-        "INSERT INTO session_tokens (token, expires_at, user_id) VALUES ($1, $2, $3);",
+        "INSERT INTO session_tokens (token, max_age, user_id) VALUES ($1, $2, $3);",
         session_token.as_bytes(),
-        PrimitiveDateTime::MAX,
+        3600,
         rec.id,
     )
-    .execute(&state.app_cx.db_pool)
+    .execute(&state.app_cx.db())
     .await
     {
         tracing::error!(?err, "session_token insert failure");

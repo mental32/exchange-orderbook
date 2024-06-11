@@ -74,7 +74,7 @@ pub async fn trade_add_order(
 
     let _deferred_revert = reserved_funds.defer_revert(
         tokio::runtime::Handle::current(),
-        state.app_cx.db_pool.clone(),
+        state.app_cx.db(),
     );
 
     let order_uuid = response.wait().await;
