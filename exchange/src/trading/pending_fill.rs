@@ -101,7 +101,13 @@ impl<'a> PendingFill<'a> {
             }
         }
 
-        for MakerFill { oix, maker: order, fill_type, .. } in self.maker_fills {
+        for MakerFill {
+            oix,
+            maker: order,
+            fill_type,
+            ..
+        } in self.maker_fills
+        {
             match fill_type {
                 // complete fill for a maker order.
                 FillType::Complete => {

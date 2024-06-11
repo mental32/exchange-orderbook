@@ -3,7 +3,8 @@
 use std::convert::Infallible;
 use std::time::Duration;
 
-use futures::{future::BoxFuture, FutureExt};
+use futures::future::BoxFuture;
+use futures::FutureExt;
 
 mod client;
 pub use client::BitcoinRpcClient;
@@ -11,7 +12,8 @@ pub use client::BitcoinRpcClient;
 mod rpc;
 use rpc::AddressType;
 
-use crate::{signal::Signals, Config};
+use crate::signal::Signals;
+use crate::Config;
 
 pub mod proto {
     //! Generated code for the protobuf definitions.
@@ -144,10 +146,11 @@ pub async fn start_grpc_proxy(
 /// Bitcoin Core server and depending on the configuration, it will either use
 /// jsonrpc over a direct http connection to the bitcoincore node or it will connect to the grpc proxy.
 ///
-pub async fn connect_bitcoin_rpc(config: &Config) -> Result<BitcoinRpcClient, Infallible> {
-    Ok(
-        BitcoinRpcClient::new_grpc(config.bitcoin_grpc_endpoint().clone())
-            .await
-            .unwrap(),
-    )
+pub async fn connect_bitcoin_rpc(
+    config: &Config,
+) -> Result<BitcoinRpcClient, tonic::transport::Error> {
+    tracing::info!(endpoint = ?config.bitcoin_grpc_endpoint(), "connecting to bitcoin grpc service");
+    let bitcoin_rpc_client =
+        BitcoinRpcClient::new_grpc(config.bitcoin_grpc_endpoint().clone()).await?;
+    Ok(bitcoin_rpc_client)
 }

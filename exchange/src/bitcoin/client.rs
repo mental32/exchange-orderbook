@@ -46,9 +46,11 @@ enum Inner {
 
 impl BitcoinRpcClient {
     /// Create a new bitcoin rpc client.
-    pub fn new_grpc(endpoint: Endpoint) -> impl std::future::Future<Output = Result<Self, ()>> {
+    pub fn new_grpc(
+        endpoint: Endpoint,
+    ) -> impl std::future::Future<Output = Result<Self, tonic::transport::Error>> {
         async move {
-            let bitcoin_core_rpc_client = BitcoinCoreRpcClient::connect(endpoint).await.unwrap();
+            let bitcoin_core_rpc_client = BitcoinCoreRpcClient::connect(endpoint).await?;
             tracing::info!("connected to bitcoin core rpc");
             Ok(Self(Inner::Grpc(bitcoin_core_rpc_client)))
         }

@@ -1,22 +1,21 @@
-use std::error;
-use std::fmt;
 use std::fmt::Debug;
-use std::io;
 use std::iter::FromIterator;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::{error, fmt, io};
 
 use ahash::HashMap;
 use async_trait::async_trait;
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::consensus::encode;
-use bitcoin::hashes::hex;
 use bitcoin::hashes::hex::FromHex;
-use bitcoin::hashes::sha256;
+use bitcoin::hashes::{hex, sha256};
 use bitcoin::secp256k1::ecdsa::Signature;
 use bitcoin::sighash::EcdsaSighashType;
-use bitcoin::{secp256k1, OutPoint, ScriptBuf};
-use bitcoin::{Amount, PrivateKey, PublicKey, Script, SignedAmount, Transaction};
+use bitcoin::{
+    secp256k1, Amount, OutPoint, PrivateKey, PublicKey, Script, ScriptBuf, SignedAmount,
+    Transaction,
+};
 use jsonrpc_async;
 use rustc_hex::ToHex;
 use serde::de::Error as SerdeError;
