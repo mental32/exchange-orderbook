@@ -12,14 +12,14 @@ use email_address::EmailAddress;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
-pub struct UserAdd {
+pub struct UserCreate {
     name: String,
     email: EmailAddress,
     password: String,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum UserAddError {
+pub enum UserCreateError {
     #[error("password hash error")]
     PasswordHashError,
     #[error("email has already been used")]
@@ -28,14 +28,14 @@ pub enum UserAddError {
     Sqlx(#[from] sqlx::Error),
 }
 
-impl IntoResponse for UserAddError {
+impl IntoResponse for UserCreateError {
     fn into_response(self) -> axum::response::Response {
         match self {
-            UserAddError::PasswordHashError => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            UserAddError::EmailAlreadyUsed => {
+            UserCreateError::PasswordHashError => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            UserCreateError::EmailAlreadyUsed => {
                 (StatusCode::CONFLICT, "email has already been used").into_response()
             }
-            UserAddError::Sqlx(err) => {
+            UserCreateError::Sqlx(err) => {
                 tracing::error!(?err, "sqlx error");
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
@@ -43,10 +43,10 @@ impl IntoResponse for UserAddError {
     }
 }
 
-pub async fn user_add(
+pub async fn user_create(
     State(state): State<InternalApiState>,
-    Json(body): Json<UserAdd>,
-) -> Result<Json<serde_json::Value>, UserAddError> {
+    Json(body): Json<UserCreate>,
+) -> Result<Json<serde_json::Value>, UserCreateError> {
     let password_hash = tokio::task::spawn_blocking({
         let password = body.password.clone();
 
@@ -59,14 +59,14 @@ pub async fn user_add(
                     .hash_password(password.as_bytes(), &salt)
                     .map_err(|err| {
                         tracing::error!(?err, "failed to hash password");
-                        UserAddError::PasswordHashError
+                        UserCreateError::PasswordHashError
                     })?;
 
-            Ok::<_, UserAddError>(password_hash.serialize())
+            Ok::<_, UserCreateError>(password_hash.serialize())
         }
     })
     .await
-    .map_err(|_| UserAddError::PasswordHashError)??;
+    .map_err(|_| UserCreateError::PasswordHashError)??;
 
     // check if the email has already been used
     let rec = sqlx::query!(
@@ -75,11 +75,11 @@ pub async fn user_add(
         "#,
         body.email.as_str()
     )
-    .fetch_optional(&state.app_cx.db_pool)
+    .fetch_optional(&state.app_cx.db())
     .await?;
 
     if rec.is_some() {
-        return Err(UserAddError::EmailAlreadyUsed);
+        return Err(UserCreateError::EmailAlreadyUsed);
     }
 
     sqlx::query!(
@@ -95,11 +95,11 @@ pub async fn user_add(
         body.email.as_str(),
         password_hash.as_bytes(),
     )
-    .execute(&state.app_cx.db_pool)
+    .execute(&state.app_cx.db())
     .await?;
 
     let rec = sqlx::query!("SELECT id FROM users WHERE email = $1", body.email.as_str())
-        .fetch_one(&state.app_cx.db_pool)
+        .fetch_one(&state.app_cx.db())
         .await?;
 
     Ok(Json(serde_json::json!({
