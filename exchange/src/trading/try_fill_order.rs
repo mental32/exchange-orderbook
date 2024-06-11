@@ -15,7 +15,7 @@ pub enum TryFillOrdersError {}
 /// This function returns a [`PendingFill`] object that encapsulates the potential outcome
 /// of the fill operation. This allows you to review the potential outcome before committing
 /// to modifying the order book.
-/// 
+///
 pub fn try_fill_orders<'a>(
     orderbook: &'a mut Orderbook,
     taker: Order,
@@ -32,7 +32,6 @@ pub fn try_fill_orders<'a>(
     };
 
     for (oix, order) in orderbook.iter_rel(maker_side) {
-        dbg!((oix, order));
         if order_type == OrderType::Limit
             && ((side == OrderSide::Buy && order.price > taker.price)
                 || (side == OrderSide::Sell && order.price < taker.price))
@@ -64,7 +63,7 @@ pub fn try_fill_orders<'a>(
         }
     }
 
-    if dbg!(taker_rem_q) == dbg!(taker.quantity.get()) {
+    if taker_rem_q == taker.quantity.get() {
         taker_fill_outcome = FillType::None;
     }
 
@@ -192,21 +191,39 @@ mod tests {
         let mut orderbook = Orderbook::new();
 
         // Adding multiple sell orders at different prices and quantities
-        orderbook.push_ask(Order { price: nz!(100), quantity: nz!(30), memo: 1 });
-        orderbook.push_ask(Order { price: nz!(105), quantity: nz!(20), memo: 2 });
-        orderbook.push_ask(Order { price: nz!(110), quantity: nz!(50), memo: 3 });
+        orderbook.push_ask(Order {
+            price: nz!(100),
+            quantity: nz!(30),
+            memo: 1,
+        });
+        orderbook.push_ask(Order {
+            price: nz!(105),
+            quantity: nz!(20),
+            memo: 2,
+        });
+        orderbook.push_ask(Order {
+            price: nz!(110),
+            quantity: nz!(50),
+            memo: 3,
+        });
 
         let taker = Order {
-            price: nz!(110),  // Taker is willing to buy up to this price
-            quantity: nz!(75),  // Taker wants a total of 75 units
+            price: nz!(110),   // Taker is willing to buy up to this price
+            quantity: nz!(75), // Taker wants a total of 75 units
             memo: 4,
         };
 
-        let result = try_fill_orders(&mut orderbook, taker, OrderSide::Buy, OrderType::Limit).unwrap();
+        let result =
+            try_fill_orders(&mut orderbook, taker, OrderSide::Buy, OrderType::Limit).unwrap();
 
         // Assertions on overall outcome
         assert_eq!(result.taker_fill_outcome, FillType::Complete);
-        assert_eq!(result.maker_fills.len(), 3, "{maker_fills:#?}", maker_fills = result.maker_fills);
+        assert_eq!(
+            result.maker_fills.len(),
+            3,
+            "{maker_fills:#?}",
+            maker_fills = result.maker_fills
+        );
 
         // Assertions on individual fills - detailed assertion on each fill type
         assert_eq!(result.maker_fills[0].maker.price, nz!(100));
@@ -222,8 +239,15 @@ mod tests {
         assert_eq!(result.maker_fills[2].fill_amount, 25);
 
         // Asserting the exact quantities and conditions met
-        let total_filled_quantity = result.maker_fills.iter().map(|fill| fill.fill_amount).sum::<u32>();
-        assert_eq!(total_filled_quantity, 75, "Total filled quantity should match the taker's required quantity.");
+        let total_filled_quantity = result
+            .maker_fills
+            .iter()
+            .map(|fill| fill.fill_amount)
+            .sum::<u32>();
+        assert_eq!(
+            total_filled_quantity, 75,
+            "Total filled quantity should match the taker's required quantity."
+        );
 
         // Assertions on the PendingFill structure
         assert_eq!(result.taker.price, nz!(110));

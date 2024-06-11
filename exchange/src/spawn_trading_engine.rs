@@ -1,10 +1,8 @@
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
-use crate::{
-    trading::{self, TradeCmd},
-    Asset, Config,
-};
+use crate::trading::{self, TradeCmd};
+use crate::{Asset, Config};
 
 pub struct SpawnTradingEngine {
     pub input: trading::TradingEngineTx,
@@ -20,8 +18,7 @@ impl SpawnTradingEngine {
 
         // stream out rows from the orders_event_source table, deserialize them into TradeCmds
         // and send them to the trading engine for processing.
-        let mut stream =
-            sqlx::query!(r#"SELECT id, jstr FROM orders_event_source"#,).fetch(&db);
+        let mut stream = sqlx::query!(r#"SELECT id, jstr FROM orders_event_source"#,).fetch(&db);
 
         while let Some(row) = stream.next().await {
             let row = row?;
@@ -36,12 +33,11 @@ impl SpawnTradingEngine {
     }
 }
 
-pub async fn spawn_trading_engine(config: &Config, db_pool: sqlx::PgPool) -> SpawnTradingEngine {
+pub async fn spawn_trading_engine(config: &Config, db: sqlx::PgPool) -> SpawnTradingEngine {
     use trading::TradingEngineCmd as T;
 
-    async fn trading_engine_supervisor(mut rx: mpsc::Receiver<T>, db_pool: sqlx::PgPool) {
-        use trading::TradeCmdPayload as P;
-        use trading::{AssetBook, Assets};
+    async fn trading_engine_supervisor(mut rx: mpsc::Receiver<T>, db: sqlx::PgPool) {
+        use trading::{AssetBook, Assets, TradeCmdPayload as P};
 
         let mut assets = Assets {
             order_uuids: Default::default(),
@@ -55,7 +51,7 @@ pub async fn spawn_trading_engine(config: &Config, db_pool: sqlx::PgPool) -> Spa
                     let res: Result<_, trading::TradingEngineError> = $e;
 
                     match sqlx::query!("INSERT INTO orders_event_source (jstr) VALUES ($1)", jstr)
-                        .execute(&db_pool)
+                        .execute(&db)
                         .await
                     {
                         Ok(_) => res,
@@ -109,7 +105,7 @@ pub async fn spawn_trading_engine(config: &Config, db_pool: sqlx::PgPool) -> Spa
     }
 
     let (input, output) = mpsc::channel(config.te_channel_capacity());
-    let handle = tokio::spawn(trading_engine_supervisor(output, db_pool));
+    let handle = tokio::spawn(trading_engine_supervisor(output, db));
 
     SpawnTradingEngine { input, handle }
 }
