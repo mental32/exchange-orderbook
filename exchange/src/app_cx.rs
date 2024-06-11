@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use atomic::Atomic;
 use futures::TryFutureExt;
+use sqlx::PgPool;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -55,7 +56,7 @@ pub struct AppCx {
     /// a client for the bitcoin core rpc.
     bitcoind_rpc: BitcoinRpcClient,
     /// a pool of connections to the database.
-    pub(crate) db_pool: sqlx::PgPool,
+    db: sqlx::PgPool,
     /// Read-only data or data that has interior mutability.
     inner_ro: Arc<Inner>,
 }
@@ -173,11 +174,15 @@ impl AppCx {
         Self {
             te_tx,
             bitcoind_rpc: btc_rpc,
-            db_pool: db,
+            db,
             inner_ro: Arc::new(Inner {
                 te_state: Atomic::new(TradingEngineState::Running),
             }),
         }
+    }
+
+    pub fn db(&self) -> PgPool {
+        self.db.clone()
     }
 
     /// get the state of the trading engine
@@ -208,7 +213,7 @@ impl AppCx {
             "#,
             user_uuid.to_string(),
             currency
-        ).fetch_one(&self.db_pool).await?.balance;
+        ).fetch_one(&self.db).await?.balance;
         tracing::trace!(?rec, %user_uuid, ?currency, "balance");
         Ok(NonZeroU64::new(rec.unwrap_or_default() as u64))
     }
@@ -240,7 +245,7 @@ impl AppCx {
             quantity.get() as i64,
             user_uuid.to_string(),
             currency,
-        ).fetch_one(&self.db_pool).await?;
+        ).fetch_one(&self.db).await?;
 
         tracing::trace!(id = ?rec.id, %user_uuid, "reserved USD fiat from user account");
 
@@ -310,7 +315,7 @@ impl AppCx {
             Ok(()) => Ok((Response(wait_response), reserve)),
             Err(err) => {
                 tracing::warn!(?err, "failed to send place order command to trading engine");
-                if let Err(err) = reserve.revert(&self.db_pool).await {
+                if let Err(err) = reserve.revert(&self.db).await {
                     tracing::error!(?err, "failed to revert reserve");
                 }
                 Err(PlaceOrderError::TradingEngineUnresponsive)

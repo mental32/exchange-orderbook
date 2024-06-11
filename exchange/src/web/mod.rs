@@ -27,7 +27,7 @@ pub use trade_add_order::TradeAddOrder;
 mod trade_cancel_order;
 mod trade_edit_order;
 
-mod user_add;
+mod user_create;
 mod user_delete;
 mod user_edit;
 mod user_get;
@@ -36,6 +36,8 @@ mod session_create;
 mod session_delete;
 
 mod public_time;
+
+mod api_key_create;
 
 /// Error returned by the webserver.
 #[derive(Debug, thiserror::Error)]
@@ -87,19 +89,28 @@ pub fn trade_routes(state: InternalApiState) -> Router {
 /// Router for the /user path
 ///
 /// This router will have the following routes:
-/// - `POST /user` - [`user_add`]
+/// - `POST /user` - [`user_create`]
 /// - `DELETE /user` - [`user_delete`]
 /// - `GET /user` - [`user_get`]
 /// - `PUT /user` - [`user_edit`]
 ///
 #[track_caller]
 pub fn user_routes(state: InternalApiState) -> Router {
-    let user = post(user_add::user_add)
+    let user = post(user_create::user_create)
         .delete(user_delete::user_delete)
         .get(user_get::user_get)
         .put(user_edit::user_edit);
 
-    Router::new().route("/user", user).with_state(state)
+    Router::new()
+        .route("/user", user)
+        .route(
+            "/user/credentials",
+            post(api_key_create::api_key_create).route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                middleware::validate_session_token,
+            )),
+        )
+        .with_state(state)
 }
 
 /// Router for the /session path
@@ -118,6 +129,15 @@ pub fn session_routes(state: InternalApiState) -> Router {
 /// Router for the /public path
 pub fn public_routes() -> Router {
     Router::new().route("/public/time", axum::routing::get(public_time::public_time))
+}
+
+fn api_router(state: InternalApiState) -> Router {
+    let router = trade_routes(state.clone())
+        .merge(user_routes(state.clone()))
+        .merge(session_routes(state.clone()))
+        .merge(public_routes());
+
+    Router::new().nest("/api", router)
 }
 
 /// Using [`axum`], serve the internal API on the given address with the provided exchange implementation.
@@ -153,12 +173,7 @@ pub fn serve(
     // Compress responses
     .compression();
 
-    let router = trade_routes(state.clone())
-        .merge(user_routes(state.clone()))
-        .merge(session_routes(state.clone()))
-        .merge(public_routes());
-
-    let router = Router::new().nest("/api", router).layer(middleware);
+    let router = api_router(state).layer(middleware);
 
     async move {
         let lst = TcpListener::bind(&address).await?;

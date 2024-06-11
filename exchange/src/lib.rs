@@ -54,8 +54,8 @@ pub enum StartFullstackError {
     #[error("database error")]
     Database(#[from] sqlx::Error),
     /// Error returned by the bitcoin rpc client.
-    #[error("bitcoin rpc error")]
-    BitcoinRpc,
+    #[error("bitcoin rpc error: {0}")]
+    BitcoinRpc(tonic::transport::Error),
     /// The exchange was interrupted.
     #[error("interrupted")]
     Interrupted,
@@ -113,7 +113,7 @@ pub fn start_fullstack(
                 wallet = ?config.bitcoin_wallet_name(),
             ))
             .await
-            .map_err(|_| StartFullstackError::BitcoinRpc)?;
+            .map_err(|err| StartFullstackError::BitcoinRpc(err))?;
 
         let (te_tx, mut te_handle) =
             spawn_trading_engine::spawn_trading_engine(&config, db.clone())
