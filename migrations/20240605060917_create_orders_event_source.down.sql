@@ -1,20 +1,10 @@
--- orders_event_source table
-CREATE TABLE IF NOT EXISTS orders_event_source (
-    id BIGSERIAL PRIMARY KEY,
-    jstr JSONB NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+-- Down migration for orders_event_source table and trigger
 
+-- Drop the trigger
+DROP TRIGGER IF EXISTS reject_update ON orders_event_source;
 
--- create a trigger on update to reject modifications to the rows
--- this is a append-only table
-CREATE OR REPLACE FUNCTION reject_update()
-RETURNS TRIGGER AS $$
-BEGIN
-    RAISE EXCEPTION 'orders_event_source is an append-only table with immutable rows.';
-END;
-$$ LANGUAGE plpgsql;
+-- Drop the trigger function
+DROP FUNCTION IF EXISTS reject_update;
 
-CREATE TRIGGER  IF NOT EXISTS reject_update
-BEFORE UPDATE ON orders_event_source
-FOR EACH ROW EXECUTE FUNCTION reject_update();
+-- Drop the table
+DROP TABLE IF EXISTS orders_event_source;
