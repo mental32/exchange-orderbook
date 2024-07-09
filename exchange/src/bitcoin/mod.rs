@@ -9,7 +9,7 @@ use futures::FutureExt;
 mod client;
 pub use client::BitcoinRpcClient;
 
-mod rpc;
+pub mod rpc;
 use rpc::AddressType;
 
 use crate::signal::Signals;
@@ -149,7 +149,7 @@ pub async fn start_grpc_proxy(
 pub async fn connect_bitcoin_rpc(
     config: &Config,
 ) -> Result<BitcoinRpcClient, tonic::transport::Error> {
-    tracing::info!(endpoint = ?config.bitcoin_grpc_endpoint(), "connecting to bitcoin grpc service");
+    tracing::info!(endpoint = ?config.bitcoin_grpc_endpoint().uri(), "connecting to bitcoin grpc service");
     let bitcoin_rpc_client =
         BitcoinRpcClient::new_grpc(config.bitcoin_grpc_endpoint().clone()).await?;
     Ok(bitcoin_rpc_client)
