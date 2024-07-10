@@ -42,6 +42,7 @@ pub struct BitcoinRpcClient(Inner);
 #[derive(Debug, Clone)]
 enum Inner {
     Grpc(BitcoinCoreRpcClient<tonic::transport::Channel>),
+    Mock,
 }
 
 impl BitcoinRpcClient {
@@ -50,9 +51,14 @@ impl BitcoinRpcClient {
         endpoint: Endpoint,
     ) -> impl std::future::Future<Output = Result<Self, tonic::transport::Error>> {
         async move {
-            let bitcoin_core_rpc_client = BitcoinCoreRpcClient::connect(endpoint).await?;
+            let bitcoin_core_rpc_client = BitcoinCoreRpcClient::connect(dbg!(endpoint)).await?;
             tracing::info!("connected to bitcoin core rpc");
             Ok(Self(Inner::Grpc(bitcoin_core_rpc_client)))
         }
+    }
+
+    /// Create a dummy client used for testing
+    pub fn new_mock() -> Self {
+        Self(Inner::Mock)
     }
 }

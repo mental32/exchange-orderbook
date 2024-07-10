@@ -46,7 +46,7 @@ pub async fn session_delete(
     ",
         session_token.as_bytes()
     )
-    .fetch_optional(&state.app_cx.db())
+    .fetch_optional(&state.db())
     .await?;
 
     match rec {

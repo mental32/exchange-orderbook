@@ -46,7 +46,7 @@ pub async fn session_create(
 ) -> Response {
     tracing::trace!(?body, "session_create");
 
-    let db = state.app_cx.db();
+    let db = state.db();
 
     let rec = match sqlx::query!(
         // language=PostgreSQL
@@ -104,7 +104,7 @@ pub async fn session_create(
         3600,
         rec.id,
     )
-    .execute(&state.app_cx.db())
+    .execute(&state.db())
     .await
     {
         tracing::error!(?err, "session_token insert failure");

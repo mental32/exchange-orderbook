@@ -48,7 +48,7 @@ pub async fn validate_session_token(
         "SELECT * FROM session_tokens WHERE token = $1",
         session_token.as_bytes()
     )
-    .fetch_optional(&state.app_cx.db())
+    .fetch_optional(&state.db())
     .await
     {
         Ok(r) => r,

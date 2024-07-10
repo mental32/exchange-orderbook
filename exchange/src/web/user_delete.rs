@@ -44,7 +44,7 @@ pub async fn user_delete(
         "#,
         body.id
     )
-    .execute(&state.app_cx.db())
+    .execute(&state.db())
     .await?;
 
     if updated_rows.rows_affected() == 0 {

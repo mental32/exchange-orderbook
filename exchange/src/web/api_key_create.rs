@@ -29,7 +29,7 @@ pub async fn api_key_create(
         &*scopes,
         &*ip_allowlist
     )
-    .execute(&s.app_cx.db())
+    .execute(&s.db())
     .await
     .unwrap();
 
