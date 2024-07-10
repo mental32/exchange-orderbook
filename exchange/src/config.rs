@@ -83,6 +83,15 @@ pub fn bitcoin_rpc_url() -> String {
 pub fn default_bitcoin_grpc_endpoint() -> tonic::transport::Endpoint {
     tonic::transport::Endpoint::from_static("http://[::1]:50051")
 }
+/// The string key used to check the environment variable for the bitcoin **grpc** url.
+pub const BITCOIN_GRPC_ENDPOINT: &str = "BITCOIN_GRPC_ENDPOINT";
+
+/// get the bitcoin grpc url from the environment or panic.
+pub fn bitcoin_grpc_url() -> String {
+    std::env::var(BITCOIN_RPC_URL).ok().unwrap_or_else(|| {
+        panic!("BITCOIN_RPC_URL env var not set");
+    })
+}
 
 /// The string key used to check the environment variable for the bitcoin grpc bind address.
 pub const BITCOIN_GRPC_BIND_ADDR: &str = "BITCOIN_GRPC_BIND_ADDR";
@@ -152,8 +161,12 @@ impl Config {
     /// If `CONFIG_FILE_PATH` is not set, this function panics.
     #[track_caller]
     pub fn load_from_env() -> Self {
-        let config_file_path = config_file_path()
-            .expect("CONFIG_FILE_PATH env var not set")
+        let path = config_file_path()
+            .expect("CONFIG_FILE_PATH env var not set");
+        if !path.exists() {
+            panic!("config file path does not exist");
+        }
+        let config_file_path = path
             .canonicalize()
             .expect("Failed to canonicalize config file path");
         let st = std::fs::read_to_string(config_file_path).expect("Failed to read config file");
