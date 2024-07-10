@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Router, ServiceExt};
 
 use tokio::net::TcpListener;
@@ -35,6 +35,13 @@ mod user_get;
 mod session_create;
 mod session_delete;
 
+mod deposit_list_addrs;
+mod deposit_status;
+
+mod withdraw_list_addrs;
+mod withdraw_status;
+mod withdraw_transfer;
+
 mod public_time;
 
 mod api_key_create;
@@ -57,12 +64,7 @@ fn internal_server_error(message: &str) -> Response {
         .into_response()
 }
 
-/// The state of the internal API.
-#[derive(Debug, Clone)]
-pub struct InternalApiState {
-    pub(crate) app_cx: crate::app_cx::AppCx,
-    pub(crate) assets: Arc<HashMap<crate::asset::AssetKey, crate::Asset>>,
-}
+type InternalApiState = crate::app_cx::AppCx;
 
 /// Router for the /trade path
 ///
@@ -113,6 +115,51 @@ pub fn user_routes(state: InternalApiState) -> Router {
         .with_state(state)
 }
 
+/// Router for the /deposit path
+///
+/// This router will have the following routes:
+/// - `GET /deposit/addresses` - [`deposit_list_addrs`]
+/// - `GET /deposit/status` - [`deposit_status`]
+#[track_caller]
+pub fn deposit_routes(state: InternalApiState) -> Router {
+    Router::new()
+        .route(
+            "/deposit/addresses",
+            get(deposit_list_addrs::deposit_list_addrs),
+        )
+        .route("/deposit/status/{tx_id}", get(deposit_status::deposit_status))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::validate_session_token,
+        ))
+        .with_state(state)
+}
+
+/// Router for the /withdrawal path
+///
+/// This router will have the following routes:
+/// - `GET /withdrawal/addresses` - [`withdraw_list_addrs`]
+/// - `GET /withdrawal/status` - [`withdraw_status`]
+/// - `POST /withdrawal/transfer` - [`withdraw_transfer`]
+#[track_caller]
+pub fn withdrawal_routes(state: InternalApiState) -> Router {
+    Router::new()
+        .route(
+            "/withdrawal/addresses",
+            get(withdraw_list_addrs::withdraw_list_addrs),
+        )
+        .route("/withdrawal/status/{tx_id}", get(withdraw_status::withdraw_status))
+        // .route(
+        //     "/withdrawal/transfer",
+        //     axum::routing::post(withdraw_transfer::withdraw_transfer),
+        // )
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::validate_session_token,
+        ))
+        .with_state(state)
+}
+
 /// Router for the /session path
 ///
 /// This router will have the following routes:
@@ -128,13 +175,15 @@ pub fn session_routes(state: InternalApiState) -> Router {
 
 /// Router for the /public path
 pub fn public_routes() -> Router {
-    Router::new().route("/public/time", axum::routing::get(public_time::public_time))
+    Router::new().route("/public/time", get(public_time::public_time))
 }
 
 fn api_router(state: InternalApiState) -> Router {
     let router = trade_routes(state.clone())
         .merge(user_routes(state.clone()))
         .merge(session_routes(state.clone()))
+        .merge(withdrawal_routes(state.clone()))
+        .merge(deposit_routes(state.clone()))
         .merge(public_routes());
 
     Router::new().nest("/api", router)

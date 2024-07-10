@@ -30,6 +30,40 @@ pub mod test;
 pub mod config;
 pub use config::Config;
 
+pub(crate) mod password {
+    use argon2::password_hash::PasswordHashString;
+    use argon2::PasswordHash;
+    use argon2::PasswordHasher;
+    use serde::{Deserialize, Deserializer};
+
+    #[derive(Deserialize, Clone)]
+    pub struct Password(pub(crate) String);
+
+    impl std::fmt::Debug for Password {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_tuple("Password").finish()
+        }
+    }
+
+    pub fn de_password_from_str<'de, D>(d: D) -> Result<Password, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        todo!()
+    }
+
+    impl Password {
+        pub fn argon2_hash_password(
+            &self,
+        ) -> Result<PasswordHashString, argon2::password_hash::Error> {
+            let argon2 = argon2::Argon2::default();
+            let salt = argon2::password_hash::SaltString::generate(&mut rand::rngs::OsRng);
+            let password_hash = argon2.hash_password(self.0.as_bytes(), &salt)?;
+            Ok(password_hash.serialize())
+        }
+    }
+}
+
 pub mod asset;
 pub use asset::Asset;
 use tracing::Instrument;
@@ -121,13 +155,9 @@ pub fn start_fullstack(
                 .initialize_trading_engine(db.clone())
                 .await?;
 
-        let assets = Arc::new(HashMap::from_iter(asset::internal_asset_list()));
-        let state = web::InternalApiState {
-            app_cx: AppCx::new(te_tx.clone(), btc_rpc, db),
-            assets,
-        };
+        let state = AppCx::new(te_tx.clone(), btc_rpc, db);
 
-        tracing::info!("launching http server");
+        tracing::info!("launching webserver and waiting for stop signal");
 
         let res = tokio::select! {
             res = web::serve(config.webserver_address(), state) => res.map_err(StartFullstackError::Webserver),

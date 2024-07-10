@@ -10,8 +10,12 @@ use std::num::NonZeroU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use argon2::password_hash::PasswordHashString;
+use argon2::PasswordHasher;
+use asset::{internal_asset_list, AssetKey};
 use atomic::Atomic;
 use futures::TryFutureExt;
+use password::Password;
 use sqlx::PgPool;
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -59,6 +63,7 @@ pub struct AppCx {
     db: sqlx::PgPool,
     /// Read-only data or data that has interior mutability.
     inner_ro: Arc<Inner>,
+    pub assets: &'static [(AssetKey, Asset)],
 }
 
 #[derive(Debug)]
@@ -160,6 +165,16 @@ pub enum CancelOrderError {
     TradingEngineUnresponsive,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum CreateUserError {
+    #[error("password hash error")]
+    PasswordHashError,
+    #[error("email has already been used")]
+    EmailUniqueViolation(sqlx::Error),
+    #[error("sqlx error")]
+    GenericSqlxError(#[from] sqlx::Error),
+}
+
 #[must_use]
 pub struct Response<T, E = TradingEngineError>(pub oneshot::Receiver<Result<T, E>>);
 
@@ -178,6 +193,7 @@ impl AppCx {
             inner_ro: Arc::new(Inner {
                 te_state: Atomic::new(TradingEngineState::Running),
             }),
+            assets: internal_asset_list(),
         }
     }
 
@@ -202,18 +218,13 @@ impl AppCx {
     ) -> Result<Option<NonZeroU64>, sqlx::Error> {
         let rec = sqlx::query!(
             r#"
-            WITH account_id AS (
-                SELECT id FROM accounts 
-                WHERE source_type = 'user' AND source_id = $1 AND currency = $2
-            )
-            SELECT (
-                (SELECT COALESCE(SUM(amount), 0) FROM account_tx_journal WHERE credit_account_id = (SELECT id FROM account_id))::BIGINT -
-                (SELECT COALESCE(SUM(amount), 0) FROM account_tx_journal WHERE debit_account_id = (SELECT id FROM account_id))::BIGINT
-            ) AS balance
-            "#,
+            SELECT calculate_balance($1, $2);"#,
             user_uuid.to_string(),
             currency
-        ).fetch_one(&self.db).await?.balance;
+        )
+        .fetch_one(&self.db)
+        .await?
+        .calculate_balance;
         tracing::trace!(?rec, %user_uuid, ?currency, "balance");
         Ok(NonZeroU64::new(rec.unwrap_or_default() as u64))
     }
@@ -348,5 +359,133 @@ impl AppCx {
                 Err(CancelOrderError::TradingEngineUnresponsive)
             }
         }
+    }
+
+    pub async fn create_user(
+        &self,
+        name: &str,
+        email: &str,
+        password_hash: PasswordHashString,
+    ) -> Result<Uuid, CreateUserError> {
+        // duplicate emails should raise a unique violation
+        if let Err(err) = sqlx::query!(
+            r#"
+            INSERT INTO users (name, email, password_hash)
+            VALUES (
+                    $1,
+                    $2,
+                    $3
+                );
+            "#,
+            name,
+            email,
+            password_hash.as_bytes(),
+        )
+        .execute(&self.db())
+        .await
+        {
+            return Err(match err {
+                sqlx::Error::Database(ref dbe) if dbe.is_unique_violation() => {
+                    CreateUserError::EmailUniqueViolation(err)
+                }
+                _ => CreateUserError::GenericSqlxError(err),
+            });
+        }
+
+        let rec = sqlx::query!("SELECT id FROM users WHERE email = $1", email)
+            .fetch_one(&self.db())
+            .await?;
+
+        Ok(rec.id)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use spawn_trading_engine::spawn_trading_engine;
+
+    use super::*;
+
+    async fn make_app_cx_fixture(db: sqlx::PgPool) -> AppCx {
+        let config = Config::load_from_toml("");
+        let (te_tx, te_handle) = spawn_trading_engine(&config, db.clone())
+            .await
+            .initialize_trading_engine(db.clone())
+            .await
+            .unwrap();
+        AppCx::new(te_tx, BitcoinRpcClient::new_mock(), db)
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_duplicate_user_email(db: sqlx::PgPool) {
+        let app_cx = make_app_cx_fixture(db.clone()).await;
+        let password_hash = Password("letmein".into());
+
+        let user_uuid = app_cx
+            .create_user(
+                "foo",
+                "foo@example.com",
+                password_hash.argon2_hash_password().unwrap(),
+            )
+            .await
+            .unwrap();
+
+        if let Err(err) = app_cx
+            .create_user(
+                "foo",
+                "foo@example.com",
+                password_hash.argon2_hash_password().unwrap(),
+            )
+            .await
+        {
+            assert!(matches!(err, CreateUserError::EmailUniqueViolation(err)));
+        }
+    }
+
+    #[sqlx::test(migrations = "../migrations")]
+    async fn test_calculate_balances(db: sqlx::PgPool) {
+        let app_cx = make_app_cx_fixture(db.clone()).await;
+
+        let password_hash = Password("letmein".into()).argon2_hash_password().unwrap();
+        let user_uuid = app_cx
+            .create_user("foo", "foo@example.com", password_hash)
+            .await
+            .unwrap();
+
+        sqlx::query!(
+            r#"
+            INSERT INTO accounts (source_type, source_id, currency)
+            VALUES ('user', $1, 'BTC');
+            "#,
+            user_uuid.to_string()
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        // Generate a random number of transactions
+        let num_transactions = rand::random::<u8>() as usize; // generate a random number of transactions
+        let mut total_credits: i64 = 0;
+
+        for _ in 0..num_transactions {
+            let amount = (rand::random::<u16>() + 1) as i64; // ensure non-zero
+            total_credits += amount;
+
+            sqlx::query!(
+                r#"
+                INSERT INTO account_tx_journal (credit_account_id, debit_account_id, currency, amount, transaction_type)
+                VALUES ((SELECT id FROM accounts WHERE source_id = $1 AND currency = 'BTC'), 1, 'BTC', $2, 'random deposit');
+                "#,
+                user_uuid.to_string(),
+                amount
+            )
+            .execute(&db)
+            .await
+            .unwrap();
+        }
+
+        let balance = app_cx.calculate_balance(user_uuid, "BTC").await.unwrap();
+
+        assert_eq!(balance, NonZeroU64::new(total_credits as u64), "Expected balance does not match calculated balance: user={user_uuid} balance={balance:?} expected={total_credits:?}");
     }
 }

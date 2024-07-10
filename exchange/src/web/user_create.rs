@@ -1,3 +1,6 @@
+use crate::app_cx::CreateUserError;
+use crate::password::{de_password_from_str, Password};
+
 use super::InternalApiState;
 
 use argon2::password_hash::rand_core::OsRng;
@@ -15,27 +18,18 @@ use serde::Deserialize;
 pub struct UserCreate {
     name: String,
     email: EmailAddress,
-    password: String,
+    #[serde(deserialize_with = "de_password_from_str")]
+    password: Password,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum UserCreateError {
-    #[error("password hash error")]
-    PasswordHashError,
-    #[error("email has already been used")]
-    EmailAlreadyUsed,
-    #[error("sqlx error")]
-    Sqlx(#[from] sqlx::Error),
-}
-
-impl IntoResponse for UserCreateError {
+impl IntoResponse for CreateUserError {
     fn into_response(self) -> axum::response::Response {
         match self {
-            UserCreateError::PasswordHashError => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            UserCreateError::EmailAlreadyUsed => {
+            CreateUserError::PasswordHashError => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            CreateUserError::EmailUniqueViolation(_) => {
                 (StatusCode::CONFLICT, "email has already been used").into_response()
             }
-            UserCreateError::Sqlx(err) => {
+            CreateUserError::GenericSqlxError(err) => {
                 tracing::error!(?err, "sqlx error");
                 StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
@@ -46,63 +40,18 @@ impl IntoResponse for UserCreateError {
 pub async fn user_create(
     State(state): State<InternalApiState>,
     Json(body): Json<UserCreate>,
-) -> Result<Json<serde_json::Value>, UserCreateError> {
-    let password_hash = tokio::task::spawn_blocking({
-        let password = body.password.clone();
+) -> Result<Json<serde_json::Value>, CreateUserError> {
+    let password_hash =
+        tokio::task::spawn_blocking({ move || body.password.argon2_hash_password() })
+            .await
+            .map_err(|_| CreateUserError::PasswordHashError)?
+            .map_err(|_| CreateUserError::PasswordHashError)?;
 
-        move || {
-            let argon2 = Argon2::default();
-            let salt = SaltString::generate(&mut OsRng);
-
-            let password_hash =
-                argon2
-                    .hash_password(password.as_bytes(), &salt)
-                    .map_err(|err| {
-                        tracing::error!(?err, "failed to hash password");
-                        UserCreateError::PasswordHashError
-                    })?;
-
-            Ok::<_, UserCreateError>(password_hash.serialize())
-        }
-    })
-    .await
-    .map_err(|_| UserCreateError::PasswordHashError)??;
-
-    // check if the email has already been used
-    let rec = sqlx::query!(
-        r#"
-        SELECT id FROM users WHERE email = $1
-        "#,
-        body.email.as_str()
-    )
-    .fetch_optional(&state.app_cx.db())
-    .await?;
-
-    if rec.is_some() {
-        return Err(UserCreateError::EmailAlreadyUsed);
-    }
-
-    sqlx::query!(
-        r#"
-        INSERT INTO users (name, email, password_hash)
-        VALUES (
-                $1,
-                $2,
-                $3
-            );
-        "#,
-        body.name,
-        body.email.as_str(),
-        password_hash.as_bytes(),
-    )
-    .execute(&state.app_cx.db())
-    .await?;
-
-    let rec = sqlx::query!("SELECT id FROM users WHERE email = $1", body.email.as_str())
-        .fetch_one(&state.app_cx.db())
+    let user_id = state
+        .create_user(body.name.as_str(), body.email.as_str(), password_hash)
         .await?;
 
     Ok(Json(serde_json::json!({
-        "user_id": rec.id.to_string(),
+        "user_id": user_id.to_string(),
     })))
 }
