@@ -32,16 +32,33 @@ pub enum Asset {
     Ether,
 }
 
-pub(crate) fn internal_asset_list() -> impl Iterator<Item = (AssetKey, Asset)> {
+
+/// Helper for the asset list
+pub trait ContainsAsset {
+    /// check if an asset-key is present in the list
+    fn contains_asset(&self, key: &AssetKey) -> bool;
+}
+
+impl ContainsAsset for [(AssetKey, Asset)] {
+    fn contains_asset(&self, key: &AssetKey) -> bool {
+        for (k, v) in self {
+            if k == key {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
+pub(crate) fn internal_asset_list() -> &'static [(AssetKey, Asset)] {
     use {Asset as A, AssetKey as K};
 
     [
-        (K::from(A::Bitcoin), A::Bitcoin),
-        (K::from("btc"), A::Bitcoin),
-        (K::from("BTC"), A::Bitcoin),
-        (K::from(A::Ether), A::Ether),
-        (K::from("eth"), A::Ether),
-        (K::from("ETH"), A::Ether),
-    ]
-    .into_iter()
+        (K::ByValue(A::Bitcoin), A::Bitcoin),
+        (K::Static("btc"), A::Bitcoin),
+        (K::Static("BTC"), A::Bitcoin),
+        (K::ByValue(A::Ether), A::Ether),
+        (K::Static("eth"), A::Ether),
+        (K::Static("ETH"), A::Ether),
+    ].as_slice()
 }

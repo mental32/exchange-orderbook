@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::middleware::auth::UserUuid;
 use super::InternalApiState;
+use crate::asset::ContainsAsset as _;
 use crate::Asset;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,7 +34,7 @@ pub async fn trade_cancel_order(
 
     if !state
         .assets
-        .contains_key(&crate::asset::AssetKey::ByValue(asset))
+        .contains_asset(&crate::asset::AssetKey::ByValue(asset))
     {
         tracing::warn!(?asset, "asset not enabled");
         return (axum::http::StatusCode::NOT_FOUND, "asset not enabled").into_response();
@@ -41,7 +42,7 @@ pub async fn trade_cancel_order(
         tracing::info!(?asset, "placing order for asset");
     }
 
-    let Ok(wait_response) = state.app_cx.cancel_order(user_uuid, body.order_uuid).await else {
+    let Ok(wait_response) = state.cancel_order(user_uuid, body.order_uuid).await else {
         tracing::warn!("failed to cancel order, trade engine is suspended");
         return super::internal_server_error("trading engine is suspended");
     };
