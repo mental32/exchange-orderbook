@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::middleware::auth::UserUuid;
 use super::InternalApiState;
+use crate::asset::ContainsAsset as _;
 use crate::trading::{
     OrderSide, OrderType, PlaceOrderResult, SelfTradeProtection, TimeInForce,
     TradingEngineError as TErr,
@@ -56,7 +57,7 @@ pub async fn trade_add_order(
 
     if !state
         .assets
-        .contains_key(&crate::asset::AssetKey::ByValue(asset))
+        .contains_asset(&crate::asset::AssetKey::ByValue(asset))
     {
         tracing::warn!(?asset, "asset not enabled");
         return (axum::http::StatusCode::NOT_FOUND, "asset not enabled").into_response();
@@ -64,7 +65,7 @@ pub async fn trade_add_order(
         tracing::info!(?asset, "placing order for asset");
     }
 
-    let (response, reserved_funds) = match state.app_cx.place_order(asset, user_uuid, body).await {
+    let (response, reserved_funds) = match state.place_order(asset, user_uuid, body).await {
         Ok(r) => r,
         Err(err) => {
             tracing::warn!(?err, "failed to place order");
@@ -74,7 +75,7 @@ pub async fn trade_add_order(
 
     let _deferred_revert = reserved_funds.defer_revert(
         tokio::runtime::Handle::current(),
-        state.app_cx.db(),
+        state.db(),
     );
 
     let order_uuid = response.wait().await;
