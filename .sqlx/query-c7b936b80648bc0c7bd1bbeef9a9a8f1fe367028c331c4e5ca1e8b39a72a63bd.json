@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT calculate_balance($1, $2);",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "calculate_balance",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c7b936b80648bc0c7bd1bbeef9a9a8f1fe367028c331c4e5ca1e8b39a72a63bd"
+}
