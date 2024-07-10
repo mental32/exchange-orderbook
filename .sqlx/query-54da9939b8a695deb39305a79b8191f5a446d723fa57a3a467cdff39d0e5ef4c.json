@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT address_text, currency\n    FROM user_addresses\n    WHERE user_id = $1\n      AND kind = 'withdrawal';\n    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "address_text",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "currency",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "54da9939b8a695deb39305a79b8191f5a446d723fa57a3a467cdff39d0e5ef4c"
+}
