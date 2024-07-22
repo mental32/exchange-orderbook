@@ -1,2 +1,3 @@
 DROP EXTENSION "uuid-ossp";
 DROP TABLE users CASCADE;
+DROP TYPE IF EXISTS user_role;

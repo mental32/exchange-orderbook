@@ -5,5 +5,8 @@ CREATE TABLE IF NOT EXISTS session_tokens (
     token BYTEA NOT NULL UNIQUE,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     max_age INT NOT NULL DEFAULT 3600,
-    user_id UUID NOT NULL REFERENCES users(id)
+    user_id UUID NOT NULL REFERENCES users(id),
+    ip_address VARCHAR(45), -- Supports both IPv4 and IPv6
+    user_agent TEXT,
+    last_accessed_at TIMESTAMP
 );
