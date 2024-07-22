@@ -99,7 +99,7 @@ The best way to interact with the Bitcoin network is to run a full node. It will
 
 ### bitcoind-grpc-proxy
 
-The currently existing jsonrpc and bitcoin rpc crates are not very well made, poorly documented, and impose unwanted dependencies on the project. The bitcoin core code itself is a type of C/C++ i can't navigate very well. So I wrote a grpc proxy to expose a well-typed interface to the exchange service while dealing with the bitcoin core jsonrpc interactions in a separate process.
+The currently existing jsonrpc and bitcoin rpc crates are difficult to use and not fully featured. The bitcoin core code itself is a type of C/C++ I can not navigate very well. So I wrote a grpc proxy to expose a well-typed interface to the exchange service while dealing with the bitcoin core jsonrpc interactions in a separate process.
 
 # Progress Checklist
 
