@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 
 <head>
     <meta charset="utf-8" />
@@ -7,197 +7,57 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/alpinejs" defer></script>
+    <script src="https://unpkg.com/htmx.org" defer></script>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="app.css">
+    <title>Crypto Exchange</title>
 </head>
 
 <body>
-    <div style="display: contents">
-        <div id="app" class="bg-white">
-            <header class="bg-[#7132F5]" id="navbar">
-                <div class="w-full py-4 mx-auto px-4 sm:px-6 lg:px-8">
-                    <div class="flex justify-between items-center py-3">
-                        <a class="logo text-white font-bold text-xl lg:text-2xl mr-1" href="/">Crypto Exchange</a>
-                        <div class="nav-actions space-x-4 text-white">
-                            <nav class="flex grow z-[5] items-center">
-                                <ul class="flex grow list-none">
-                                    <li
-                                        class="flex relative items-center mr-[32px] text-gray-900 hover:text-gray-900 dark:text-gray-50 dark:hover:text-gray-50 transition-all duration-300 ease-in-out before:absolute before:bottom-0 before:left-0 before:w-0 before:h-[2px] before:bg-gray-900 before:transition-all before:duration-300 before:ease-in-out hover:before:w-full dark:before:bg-gray-50">
-                                        <a href="/"> Explore </a>
-                                    </li>
-                                    <li
-                                        class="flex relative items-center mr-[32px] text-gray-900 hover:text-gray-900 dark:text-gray-50 dark:hover:text-gray-50 transition-all duration-300 ease-in-out before:absolute before:bottom-0 before:left-0 before:w-0 before:h-[2px] before:bg-gray-900 before:transition-all before:duration-300 before:ease-in-out hover:before:w-full dark:before:bg-gray-50">
-                                        <a href="/prices"> Prices </a>
-                                    </li>
-                                    <li
-                                        class="flex relative items-center mr-[32px] text-gray-900 hover:text-gray-900 dark:text-gray-50 dark:hover:text-gray-50 transition-all duration-300 ease-in-out before:absolute before:bottom-0 before:left-0 before:w-0 before:h-[2px] before:bg-gray-900 before:transition-all before:duration-300 before:ease-in-out hover:before:w-full dark:before:bg-gray-50">
-                                        <a href="/"> Why us?</a>
-                                    </li>
-                                    <li
-                                        class="flex relative items-center mr-[32px] text-gray-900 hover:text-gray-900 dark:text-gray-50 dark:hover:text-gray-50 transition-all duration-300 ease-in-out before:absolute before:bottom-0 before:left-0 before:w-0 before:h-[2px] before:bg-gray-900 before:transition-all before:duration-300 before:ease-in-out hover:before:w-full dark:before:bg-gray-50">
-                                        <a href="/learn"> Learn </a>
-                                    </li>
-                                    <li
-                                        class="flex relative items-center mr-[32px] text-gray-900 hover:text-gray-900 dark:text-gray-50 dark:hover:text-gray-50 transition-all duration-300 ease-in-out before:absolute before:bottom-0 before:left-0 before:w-0 before:h-[2px] before:bg-gray-900 before:transition-all before:duration-300 before:ease-in-out hover:before:w-full dark:before:bg-gray-50">
-                                        <a href="/"> Support </a>
-                                    </li>
-                                </ul>
-                                <ul class="list-none flex">
-                                    <li class="self-baseline ml-ml-[16px]">
-                                        <button
-                                            class="sign-in bg-transparent text-white py-2 px-4 border border-[#D9F0FF] rounded-full hover:bg-[#D9F0FF] hover:text-[#7132F5] focus:outline-none transition duration-150 ease-in-out border-solid">Sign
-                                            in</button>
-                                    </li>
-                                    <li class="self-baseline ml-[16px]">
-                                        <button
-                                            class="sign-up bg-white text-[#7132F5] py-2 px-4 border border-solid rounded-full hover:bg-opacity-75 focus:outline-none transition duration-150 ease-in-out">Sign
-                                            up</button>
-                                    </li>
-                                </ul>
-                            </nav>
-                        </div>
-                    </div>
-                </div>
-            </header>
+    <div id="app" class="bg-base-100">
+        <header class="navbar bg-base-300 h-[100px]">
+            <div class="navbar-start">
+                <a class="btn btn-ghost text-xl">Crypto Exchange</a>
+            </div>
+            <div class="navbar-end flex gap-2">
+                <label class="swap swap-rotate">
+                    <!-- this hidden checkbox controls the state -->
+                    <input type="checkbox" class="theme-controller" value="light" />
 
-            <div class="relative z-[1000] h-[1rem]">
-                <div class=" bg-[#CFCCFF] flex justify-center px-[20px] py-[8px] sm:leading-[20px] sm:text-[length:var(--body-font-size)] leading-[16px] text-[length:var(--body-font-size-sm)] [&amp;_strong]:font-bold [&amp;_a]:underline hover:[&amp;_a]:underline text-[#000000] [&amp;_a]:text-[#7132F5] border-b-[#CDCDCD] border-b border-solid font-['GT_Standard_S'] fixed top-0 left-0 right-0"
-                    style="--body-font-size:15px;--body-font-size-sm:14">
-                    <div>
-                        <span>
-                            <strong>Don't invest unless you're prepared to lose all the money you invest. This is a
-                                high-risk investment and you should not expect to be protected if something goes wrong.
-                                <a href="/" class="underline" style="color: rgb(113 50 245/var(--tw-text-opacity))">Take
-                                    2
-                                    minutes to learn more</a>.</strong></span>
-                    </div>
-                </div>
-            </div>
-            <div class="px-0">
-                <Navbar />
-            </div>
-            <div class="relative bg-[#EEECFB] h-[744px]" style="padding: 50px 0px;">
-                <div class="w-full flex box-border px-[30px] min-[1040px]:px-[calc((100%-980px)/2)]">
-                    <div class="justify-center flex-col flex flex-auto text-center" style="padding-right: 160px">
-                        <div class="w-full h-0 bg-[#0E0C2]"></div>
-                        <div class="bg-[#0E0C2]">
-                            <h1 class="text-left text-black text-[32px]"><span>Buy Bitcoin & Crypto 🇬🇧</span></h1>
-                        </div>
-                        <div class="w-full h-[32px]"></div>
-                        <div class="text-left font-normal">
-                            <p>
-                                Grow your portfolio in a more fair and open financial system. <strong>Start trading
-                                    crypto with
-                                    just £10</strong>
-                            </p>
-                        </div>
-                        <div class="w-full h-[32px]"></div>
-                        <div class="w-full text-left">
-                            <button
-                                class="sign-up bg-[#462FC2] text-white py-2 px-4 border border-solid rounded-full hover:bg-opacity-75 focus:outline-none transition duration-150 absolute box-border shadow-2xl">Sign
-                                up</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
+                    <!-- sun icon -->
+                    <svg class="swap-on h-8 w-8 fill-current" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                        <path
+                            d="M5.64,17l-.71.71a1,1,0,0,0,0,1.41,1,1,0,0,0,1.41,0l.71-.71A1,1,0,0,0,5.64,17ZM5,12a1,1,0,0,0-1-1H3a1,1,0,0,0,0,2H4A1,1,0,0,0,5,12Zm7-7a1,1,0,0,0,1-1V3a1,1,0,0,0-2,0V4A1,1,0,0,0,12,5ZM5.64,7.05a1,1,0,0,0,.7.29,1,1,0,0,0,.71-.29,1,1,0,0,0,0-1.41l-.71-.71A1,1,0,0,0,4.93,6.34Zm12,.29a1,1,0,0,0,.7-.29l.71-.71a1,1,0,1,0-1.41-1.41L17,5.64a1,1,0,0,0,0,1.41A1,1,0,0,0,17.66,7.34ZM21,11H20a1,1,0,0,0,0,2h1a1,1,0,0,0,0-2Zm-9,8a1,1,0,0,0-1,1v1a1,1,0,0,0,2,0V20A1,1,0,0,0,12,19ZM18.36,17A1,1,0,0,0,17,18.36l.71.71a1,1,0,0,0,1.41,0,1,1,0,0,0,0-1.41ZM12,6.5A5.5,5.5,0,1,0,17.5,12,5.51,5.51,0,0,0,12,6.5Zm0,9A3.5,3.5,0,1,1,15.5,12,3.5,3.5,0,0,1,12,15.5Z" />
+                    </svg>
 
-            <div class="text-[#0E0C28]">
-                <div class=" w-full box-border px-[30px] min-[1234px]:px-[calc((100%-1174px)/2)]">
-                    <div class="font-medium">
-                        <div class="">
-                            <div class="w-full h-[84px]"></div>
-                        </div>
-                        <div class="">
-                            <h2 class="text-center w-full h-[84px] text-[36px]">
-                                <span>A crypto exchange for everyone</span>
-                            </h2>
-                        </div>
-                        <div class="">
-                            <div class="w-full h-[24px]"></div>
-                        </div>
-                        <div class="text-center">
-                            <div class="grid gap-0" style="grid-template-columns: 1fr 1fr 1fr;">
-                                <div class="items-center flex flex-col flex-wrap">
-                                    <h3 class="text-[36px]">
-                                        <span>10M+</span>
-                                    </h3>
-                                    <div class="text-[16px]">
-                                        <p>Clients</p>
-                                    </div>
-                                </div>
-                                <div class="">
-                                    <h3 class="text-[36px]">190+</h3>
-                                    <div class="text-[16px]">
-                                        <p>Countries supported</p>
-                                    </div>
-                                </div>
-                                <div class="">
-                                    <h3 class="text-[36px]">$207B+</h3>
-                                    <div class="text-[16px]">
-                                        <p>Quarterly trading volume</p>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="">
-                            <div class="w-full h-[84px]"></div>
-                        </div>
-                    </div>
+                    <!-- moon icon -->
+                    <svg class="swap-off h-8 w-8 fill-current" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                        <path
+                            d="M21.64,13a1,1,0,0,0-1.05-.14,8.05,8.05,0,0,1-3.37.73A8.15,8.15,0,0,1,9.08,5.49a8.59,8.59,0,0,1,.25-2A1,1,0,0,0,8,2.36,10.14,10.14,0,1,0,22,14.05,1,1,0,0,0,21.64,13Zm-9.5,6.69A8.14,8.14,0,0,1,7.08,5.22v.27A10.15,10.15,0,0,0,17.22,15.63a9.79,9.79,0,0,0,2.1-.22A8.11,8.11,0,0,1,12.14,19.73Z" />
+                    </svg>
+                </label>
+                <a class="btn bg-base-300 border-solid border-2 hover:border-[oklch(var(--a))] hover:text-white">Sign
+                    In</a>  
+                <a
+                    class="btn bg-base-300 rounded-4 border-solid border-2 hover:border-[oklch(var(--a))] hover:text-white">Sign
+                    Up</a>
+            </div>
+        </header>
+
+        <div class="hero bg-base-100 min-h-screen">
+            <div class="hero-content text-center">
+                <div class="max-w-md">
+                    <h1 class="text-5xl font-bold">Invest in your future</h1>
+                    <p class="py-6">
+                        Grow your portfolio in a fair and open financial system.
+                    </p>
+                    <button class="btn btn-primary">Get Started</button>
                 </div>
             </div>
-
-            <footer class="text-white bg-[#7132f5]" style="padding: 82px 0 160px;">
-                <div class="w-full box-border px-[30px] min-[1040px]:px-[calc((100%-908px)/2)]">
-                    <div class="block">
-                        <ul class="footer-primary-list columns-2 list-none">
-                            <li>
-                                <span class="text-[#C0B9FF]">Features</span>
-                                <ul>
-                                    <li><a href="/features/margin-trading">Margin Trading</a></li>
-                                    <li><a href="/features/otc-exchange">OTC Trading</a></li>
-                                    <li><a href="/institutions">Institutions</a></li>
-                                    <li><a href="/features/api-trading">API Trading</a></li>
-                                    <li><a href="/features">All features</a></li>
-                                </ul>
-                            </li>
-                            <li>
-                                <span class="text-[#C0B9FF]">Popular Markets</span>
-                                <ul>
-                                    <li><a href="/convert/btc/usd">BTC to USD</a></li>
-                                    <li><a href="/convert/eth/usd">ETH to USD</a></li>
-                                    <li><a href="/convert">All crypto markets</a></li>
-                                </ul>
-                            </li>
-                            <li>
-                                <span class="text-[#C0B9FF]"> Buying Guides </span>
-                                <ul>
-                                    <li><a href="/learn/buy-bitcoin-btc">Buy Bitcoin</a></li>
-                                    <li><a href="/learn/buy-ethereum-eth">Buy Ethereum</a></li>
-                                </ul>
-                            </li>
-                            <li>
-                                <span class="text-[#C0B9FF]"> Browse Prices </span>
-                                <ul>
-                                    <li><a href="/prices/bitcoin">Bitcoin Price</a></li>
-                                    <li><a href="/prices/ethereum">Ethereum Price</a></li>
-                                    <li><a href="/prices">All crypto prices</a></li>
-                                </ul>
-                            </li>
-                            <li>
-                                <span class="text-[#C0B9FF]"> Crypto Education </span>
-                                <ul>
-                                    <li><a href="/learn/what-is-cryptocurrency">What is cryptocurrency?</a></li>
-                                    <li><a href="/learn/types-of-cryptocurrency">Types of cryptocurrency</a></li>
-                                    <li><a href="/learn/what-is-blockchain-technology">What is a blockchain?</a></li>
-                                    <li><a href="/learn/what-is-bitcoin-btc">What is Bitcoin?</a></li>
-                                    <li><a href="/learn/what-is-ethereum-eth">What is Ethereum?</a></li>
-                                    <li><a href="/learn">Learn crypto</a></li>
-                                </ul>
-                            </li>
-                        </ul>
-                    </div>
-                </div>
-            </footer>
         </div>
     </div>
+
+
 </body>
 
 </html>
