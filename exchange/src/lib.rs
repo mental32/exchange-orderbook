@@ -151,8 +151,7 @@ pub fn start_fullstack(
 
         let (te_tx, mut te_handle) =
             spawn_trading_engine::spawn_trading_engine(&config, db.clone())
-                .await
-                .initialize_trading_engine(db.clone())
+                .init_from_db(db.clone())
                 .await?;
 
         let state = AppCx::new(te_tx.clone(), btc_rpc, db);
