@@ -10,7 +10,7 @@ pub struct SpawnTradingEngine {
 }
 
 impl SpawnTradingEngine {
-    pub async fn initialize_trading_engine(
+    pub async fn init_from_db(
         self,
         db: sqlx::PgPool,
     ) -> Result<(trading::TradingEngineTx, tokio::task::JoinHandle<()>), sqlx::Error> {
@@ -33,7 +33,7 @@ impl SpawnTradingEngine {
     }
 }
 
-pub async fn spawn_trading_engine(config: &Config, db: sqlx::PgPool) -> SpawnTradingEngine {
+pub fn spawn_trading_engine(config: &Config, db: sqlx::PgPool) -> SpawnTradingEngine {
     use trading::TradingEngineCmd as T;
 
     async fn trading_engine_supervisor(mut rx: mpsc::Receiver<T>, db: sqlx::PgPool) {
@@ -45,7 +45,7 @@ pub async fn spawn_trading_engine(config: &Config, db: sqlx::PgPool) -> SpawnTra
             btc: AssetBook::new(Asset::Bitcoin),
         };
 
-        macro_rules! safely_commit_value {
+        macro_rules! try_event_log {
             ($input:expr, $e:expr) => {
                 if let Ok(jstr) = ::serde_json::to_value(&$input) {
                     let res: Result<_, trading::TradingEngineError> = $e;
@@ -77,7 +77,7 @@ pub async fn spawn_trading_engine(config: &Config, db: sqlx::PgPool) -> SpawnTra
                 }
                 T::Shutdown => break,
                 T::Trade(TradeCmd::PlaceOrder((place_order, response))) => {
-                    let t = safely_commit_value!(
+                    let t = try_event_log!(
                         place_order,
                         trading::do_place_order(&mut assets, place_order)
                     );
@@ -85,7 +85,7 @@ pub async fn spawn_trading_engine(config: &Config, db: sqlx::PgPool) -> SpawnTra
                     let _ = response.send(t);
                 }
                 T::Trade(TradeCmd::CancelOrder((cancel_order, response))) => {
-                    let t = safely_commit_value!(
+                    let t = try_event_log!(
                         cancel_order,
                         trading::do_cancel_order(&mut assets, cancel_order)
                     );

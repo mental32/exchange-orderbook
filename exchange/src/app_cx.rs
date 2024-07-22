@@ -409,8 +409,7 @@ mod test {
     async fn make_app_cx_fixture(db: sqlx::PgPool) -> AppCx {
         let config = Config::load_from_toml("");
         let (te_tx, te_handle) = spawn_trading_engine(&config, db.clone())
-            .await
-            .initialize_trading_engine(db.clone())
+            .init_from_db(db.clone())
             .await
             .unwrap();
         AppCx::new(te_tx, BitcoinRpcClient::new_mock(), db)

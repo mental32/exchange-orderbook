@@ -413,7 +413,7 @@ mod tests {
 
     async fn trading_engine_fixture(db: sqlx::PgPool) -> (Config, SpawnTradingEngine) {
         let config = crate::config::Config::load_from_toml("");
-        let spawn_trading_engine = spawn_trading_engine(&config, db).await;
+        let spawn_trading_engine = spawn_trading_engine(&config, db);
         (config, spawn_trading_engine)
     }
 
@@ -457,7 +457,7 @@ mod tests {
         let _ = tracing_subscriber::fmt().with_test_writer().try_init();
 
         let (_config, te) = trading_engine_fixture(db.clone()).await;
-        let (te, _task) = te.initialize_trading_engine(db.clone()).await.unwrap();
+        let (te, _task) = te.init_from_db(db.clone()).await.unwrap();
         CX.scope((te, db), async {
             let users = (0..100).map(|_| new_user_uuid()).collect::<Vec<_>>();
             let bob = users[0];
