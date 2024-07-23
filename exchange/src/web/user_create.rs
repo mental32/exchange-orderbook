@@ -37,7 +37,7 @@ impl IntoResponse for CreateUserError {
     }
 }
 
-pub async fn user_create(
+pub async fn f(
     State(state): State<InternalApiState>,
     Json(body): Json<UserCreate>,
 ) -> Result<Json<serde_json::Value>, CreateUserError> {

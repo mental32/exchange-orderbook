@@ -39,7 +39,7 @@ pub struct SessionCreate {
     password: Password,
 }
 
-pub async fn session_create(
+pub async fn f(
     State(state): State<InternalApiState>,
     jar: CookieJar,
     Json(body): Json<SessionCreate>,
