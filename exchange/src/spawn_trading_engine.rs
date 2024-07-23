@@ -18,7 +18,7 @@ impl SpawnTradingEngine {
 
         // stream out rows from the orders_event_source table, deserialize them into TradeCmds
         // and send them to the trading engine for processing.
-        let mut stream = sqlx::query!(r#"SELECT id, jstr FROM orders_event_source"#,).fetch(&db);
+        let mut stream = sqlx::query!(r#"SELECT id, jstr FROM trading_event_source"#,).fetch(&db);
 
         while let Some(row) = stream.next().await {
             let row = row?;
@@ -50,7 +50,7 @@ pub fn spawn_trading_engine(config: &Config, db: sqlx::PgPool) -> SpawnTradingEn
                 if let Ok(jstr) = ::serde_json::to_value(&$input) {
                     let res: Result<_, trading::TradingEngineError> = $e;
 
-                    match sqlx::query!("INSERT INTO orders_event_source (jstr) VALUES ($1)", jstr)
+                    match sqlx::query!("INSERT INTO trading_event_source (jstr) VALUES ($1)", jstr)
                         .execute(&db)
                         .await
                     {
