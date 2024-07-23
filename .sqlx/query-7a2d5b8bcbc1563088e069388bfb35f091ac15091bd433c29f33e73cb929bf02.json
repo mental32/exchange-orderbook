@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO orders_event_source (jstr) VALUES ($1)",
+  "query": "INSERT INTO trading_event_source (jstr) VALUES ($1)",
   "describe": {
     "columns": [],
     "parameters": {
@@ -10,5 +10,5 @@
     },
     "nullable": []
   },
-  "hash": "258590755dd8d4a72fad712dd9969fdb2446c1cd12eca1b6c02ccf8003fc92a7"
+  "hash": "7a2d5b8bcbc1563088e069388bfb35f091ac15091bd433c29f33e73cb929bf02"
 }
