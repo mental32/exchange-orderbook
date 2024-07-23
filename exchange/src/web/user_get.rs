@@ -33,7 +33,7 @@ impl IntoResponse for UserGetError {
     }
 }
 
-pub async fn user_get(
+pub async fn f(
     State(state): State<InternalApiState>,
     Json(body): Json<UserGet>,
 ) -> Result<Json<serde_json::Value>, UserGetError> {

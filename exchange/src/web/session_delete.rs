@@ -29,7 +29,7 @@ impl IntoResponse for SessionDeleteError {
     }
 }
 
-pub async fn session_delete(
+pub async fn f(
     State(state): State<InternalApiState>,
     Json(SessionDelete { session_token }): Json<SessionDelete>,
 ) -> Result<StatusCode, SessionDeleteError> {

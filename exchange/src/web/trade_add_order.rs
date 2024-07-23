@@ -40,7 +40,7 @@ pub struct TradeAddOrderResponse {
 }
 
 /// Place an order for `asset`
-pub async fn trade_add_order(
+pub async fn f(
     State(state): State<InternalApiState>,
     Extension(UserUuid(user_uuid)): Extension<UserUuid>,
     Path(asset): Path<String>,

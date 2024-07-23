@@ -17,7 +17,7 @@ pub struct TradeCancelOrder {
 pub struct TradeCancelOrderResponse {}
 
 /// Place an order for `asset`
-pub async fn trade_cancel_order(
+pub async fn f(
     State(state): State<InternalApiState>,
     Extension(UserUuid(user_uuid)): Extension<UserUuid>,
     Path(asset): Path<String>,

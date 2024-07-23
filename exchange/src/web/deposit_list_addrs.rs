@@ -7,7 +7,7 @@ use axum::{
 
 use super::{middleware::auth::UserUuid, InternalApiState};
 
-pub async fn deposit_list_addrs(
+pub async fn f(
     State(state): State<InternalApiState>,
     Extension(UserUuid(user_id)): Extension<UserUuid>,
 ) -> Response {

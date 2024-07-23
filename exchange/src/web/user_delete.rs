@@ -34,7 +34,7 @@ impl IntoResponse for UserDeleteError {
     }
 }
 
-pub async fn user_delete(
+pub async fn f(
     State(state): State<InternalApiState>,
     Json(body): Json<UserDelete>,
 ) -> Result<Json<serde_json::Value>, UserDeleteError> {
