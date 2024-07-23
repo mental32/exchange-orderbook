@@ -27,6 +27,21 @@
         "ordinal": 4,
         "name": "user_id",
         "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "ip_address",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "user_agent",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "last_accessed_at",
+        "type_info": "Timestamp"
       }
     ],
     "parameters": {
@@ -39,7 +54,10 @@
       false,
       false,
       false,
-      false
+      false,
+      true,
+      true,
+      true
     ]
   },
   "hash": "173f10bbf6cc16814a72e8d88fe3c251a4d115c89bf152e844f771ee0521c659"

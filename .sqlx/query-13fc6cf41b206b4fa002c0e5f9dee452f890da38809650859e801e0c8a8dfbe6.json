@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, jstr FROM orders_event_source",
+  "query": "SELECT id, jstr FROM trading_event_source",
   "describe": {
     "columns": [
       {
@@ -22,5 +22,5 @@
       false
     ]
   },
-  "hash": "2a0f1bb6ee5beb468683e1acb860c63c648a458e0b0e1a3d80454dbae56253fa"
+  "hash": "13fc6cf41b206b4fa002c0e5f9dee452f890da38809650859e801e0c8a8dfbe6"
 }
