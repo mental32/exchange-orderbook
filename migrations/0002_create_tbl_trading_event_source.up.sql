@@ -1,5 +1,5 @@
--- orders_event_source table
-CREATE TABLE IF NOT EXISTS orders_event_source (
+-- trading_event_source table
+CREATE TABLE IF NOT EXISTS trading_event_source (
     id BIGSERIAL PRIMARY KEY,
     jstr JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -11,10 +11,11 @@ CREATE TABLE IF NOT EXISTS orders_event_source (
 CREATE OR REPLACE FUNCTION reject_update()
 RETURNS TRIGGER AS $$
 BEGIN
-    RAISE EXCEPTION 'orders_event_source is an append-only table with immutable rows.';
+    RAISE EXCEPTION 'trading_event_source
+ is an append-only table with immutable rows.';
 END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER reject_update
-BEFORE UPDATE ON orders_event_source
+BEFORE UPDATE ON trading_event_source
 FOR EACH ROW EXECUTE FUNCTION reject_update();
