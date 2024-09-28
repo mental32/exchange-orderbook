@@ -6,9 +6,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::http::header;
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Router, ServiceExt};
 
 use tokio::net::TcpListener;
@@ -16,17 +16,21 @@ use tower::ServiceBuilder;
 
 use tower_http::normalize_path::NormalizePathLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
+use tower_http::services::ServeDir;
+use tower_http::timeout::TimeoutLayer;
+use tower_http::trace::{
+    DefaultMakeSpan, DefaultOnFailure, DefaultOnRequest, DefaultOnResponse, TraceLayer,
+};
+use tower_http::{LatencyUnit, ServiceBuilderExt};
 
 mod middleware;
 
 mod trade_add_order;
-use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
-use tower_http::{LatencyUnit, ServiceBuilderExt};
 pub use trade_add_order::TradeAddOrder;
 mod trade_cancel_order;
 mod trade_edit_order;
 
+mod user_balance;
 mod user_create;
 mod user_delete;
 mod user_edit;
@@ -35,40 +39,20 @@ mod user_get;
 mod session_create;
 mod session_delete;
 
+mod deposit_create_addr;
 mod deposit_list_addrs;
 mod deposit_status;
 
+mod withdraw_create_addr;
+mod withdraw_delete_addr;
 mod withdraw_list_addrs;
 mod withdraw_status;
 mod withdraw_transfer;
 
 mod public_time;
 
-// mod create_api_key;
-
-mod hx_sign_in {
-    use axum::{extract::State, response::Html};
-
-    use super::InternalApiState;
-
-    pub async fn f(
-        State(state): State<InternalApiState>,
-    ) -> Html<String> {
-        todo!()
-    }
-}
-
-mod hx_sign_up {
-    use axum::{extract::State, response::Html};
-
-    use super::InternalApiState;
-
-    pub async fn f(
-        State(state): State<InternalApiState>,
-    ) -> Html<String> {
-        todo!()
-    }
-}
+mod html_home;
+mod html_index;
 
 /// Error returned by the webserver.
 #[derive(Debug, thiserror::Error)]
@@ -91,12 +75,6 @@ fn internal_server_error(message: &str) -> Response {
 type InternalApiState = crate::app_cx::AppCx;
 
 /// Router for the /trade path
-///
-/// This router will have the following routes:
-/// - `POST /trade/order` - [`trade_add_order`]
-/// - `DELETE /trade/order` - [`trade_cancel_order`]
-/// - `PUT /trade/order` - [`trade_edit_order`]
-///
 #[track_caller]
 pub fn trade_routes(state: InternalApiState) -> Router {
     let trade_order = post(trade_add_order::f)
@@ -113,44 +91,37 @@ pub fn trade_routes(state: InternalApiState) -> Router {
 }
 
 /// Router for the /user path
-///
-/// This router will have the following routes:
-/// - `POST /user` - [`user_create`]
-/// - `DELETE /user` - [`user_delete`]
-/// - `GET /user` - [`user_get`]
-/// - `PUT /user` - [`user_edit`]
-///
 #[track_caller]
 pub fn user_routes(state: InternalApiState) -> Router {
-    let user = post(user_create::f)
-        .delete(user_delete::f)
-        .get(user_get::f)
-        .put(user_edit::f);
-
     Router::new()
-        .route("/user", user)
-        // .route(
-        //     "/user/credentials",
-        //     post(create_api_key::api_key_create).route_layer(axum::middleware::from_fn_with_state(
-        //         state.clone(),
-        //         middleware::validate_session_token,
-        //     )),
-        // )
+        .route("/user", post(user_create::f))
+        .route(
+            "/user/:id",
+            delete(user_delete::f)
+                .get(user_get::f)
+                .put(user_edit::f)
+                .route_layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    middleware::validate_session_token,
+                )),
+        )
+        .route(
+            "/user/:id/balance/:currency",
+            get(user_balance::f).route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                middleware::validate_session_token,
+            )),
+        )
         .with_state(state)
 }
 
 /// Router for the /deposit path
-///
-/// This router will have the following routes:
-/// - `GET /deposit/addresses` - [`deposit_list_addrs`]
-/// - `GET /deposit/status` - [`deposit_status`]
-///
 #[track_caller]
 pub fn deposit_routes(state: InternalApiState) -> Router {
     Router::new()
         .route(
             "/deposit/addresses",
-            get(deposit_list_addrs::f),
+            get(deposit_list_addrs::f).post(deposit_create_addr::f),
         )
         .route("/deposit/status/{tx_id}", get(deposit_status::f))
         .route_layer(axum::middleware::from_fn_with_state(
@@ -161,18 +132,14 @@ pub fn deposit_routes(state: InternalApiState) -> Router {
 }
 
 /// Router for the /withdrawal path
-///
-/// This router will have the following routes:
-/// - `GET /withdrawal/addresses` - [`withdraw_list_addrs`]
-/// - `GET /withdrawal/status` - [`withdraw_status`]
-/// - `POST /withdrawal/transfer` - [`withdraw_transfer`]
-///
 #[track_caller]
 pub fn withdrawal_routes(state: InternalApiState) -> Router {
     Router::new()
         .route(
             "/withdrawal/addresses",
-            get(withdraw_list_addrs::f),
+            get(withdraw_list_addrs::f)
+                .post(withdraw_create_addr::f)
+                .delete(withdraw_delete_addr::f),
         )
         .route("/withdrawal/status/{tx_id}", get(withdraw_status::f))
         // .route(
@@ -187,11 +154,6 @@ pub fn withdrawal_routes(state: InternalApiState) -> Router {
 }
 
 /// Router for the /session path
-///
-/// This router will have the following routes:
-/// - `POST /session` - [`session_create`]
-/// - `DELETE /session` - [`session_delete`]
-///
 #[track_caller]
 pub fn session_routes(state: InternalApiState) -> Router {
     let session = post(session_create::f).delete(session_delete::f);
@@ -215,12 +177,18 @@ fn api_router(state: InternalApiState) -> Router {
     Router::new().nest("/api", router)
 }
 
-fn hx_router(state: InternalApiState) -> Router {
-    let router = Router::new()
-        .route("sign-in", get(hx_sign_in::f))
-        .with_state(state);
-
-    Router::new().nest("/hx", router)
+fn html_router(state: InternalApiState) -> Router {
+    Router::new()
+        .route("/", get(html_index::f))
+        .route(
+            "/c",
+            get(html_home::f).route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                middleware::validate_session_token_or_redirect,
+            )),
+        )
+        .fallback_service(ServeDir::new(state.config().fe_web_dir().join("www/")))
+        .with_state(state)
 }
 
 /// Using [`axum`], serve the internal API on the given address with the provided exchange implementation.
@@ -243,8 +211,9 @@ pub fn serve(
             .on_body_chunk(|chunk: &axum::body::Bytes, latency: Duration, _: &tracing::Span| {
                 tracing::trace!(size_bytes = chunk.len(), latency = ?latency, "sending body chunk")
             })
-            .make_span_with(DefaultMakeSpan::new().include_headers(true))
-            .on_response(DefaultOnResponse::new().include_headers(true).latency_unit(LatencyUnit::Micros)),
+            .make_span_with(DefaultMakeSpan::new().include_headers(true)).on_request(DefaultOnRequest::new())
+            .on_response(DefaultOnResponse::new().latency_unit(LatencyUnit::Micros))
+            .on_failure(DefaultOnFailure::new()),
     )
     .sensitive_response_headers(sensitive_headers)
     // Set a timeout
@@ -256,11 +225,16 @@ pub fn serve(
     // Compress responses
     .compression();
 
-    let router = api_router(state).layer(middleware);
+    let router = api_router(state.clone())
+        .merge(html_router(state))
+        .layer(middleware);
 
     async move {
         let lst = TcpListener::bind(&address).await?;
-        let app = axum::serve(lst, router.into_make_service());
+        let app = axum::serve(
+            lst,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        );
         tracing::info!(?address, "Serving webserver API");
         let rval = app
             .await
