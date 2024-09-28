@@ -23,6 +23,10 @@ pub use pending_fill::{ExecutePendingFillError, FillType, PendingFill};
 pub mod try_fill_order;
 pub use try_fill_order::{try_fill_orders, TryFillOrdersError};
 
+mod te_response;
+pub use te_response::TeResponse;
+
+
 /// The unique identifier for an order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 pub struct OrderUuid(pub uuid::Uuid);
@@ -403,7 +407,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::spawn_trading_engine::{spawn_trading_engine, SpawnTradingEngine};
-    use crate::Config;
+    use crate::Configuration;
 
     use super::*;
 
@@ -411,8 +415,8 @@ mod tests {
         static CX: (TradingEngineTx, sqlx::PgPool);
     }
 
-    async fn trading_engine_fixture(db: sqlx::PgPool) -> (Config, SpawnTradingEngine) {
-        let config = crate::config::Config::load_from_toml("");
+    async fn trading_engine_fixture(db: sqlx::PgPool) -> (Configuration, SpawnTradingEngine) {
+        let config = crate::config::Configuration::load_from_toml("");
         let spawn_trading_engine = spawn_trading_engine(&config, db);
         (config, spawn_trading_engine)
     }

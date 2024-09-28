@@ -2,7 +2,7 @@ use futures::StreamExt;
 use tokio::sync::mpsc;
 
 use crate::trading::{self, TradeCmd};
-use crate::{Asset, Config};
+use crate::{Asset, Configuration};
 
 pub struct SpawnTradingEngine {
     pub input: trading::TradingEngineTx,
@@ -33,7 +33,7 @@ impl SpawnTradingEngine {
     }
 }
 
-pub fn spawn_trading_engine(config: &Config, db: sqlx::PgPool) -> SpawnTradingEngine {
+pub fn spawn_trading_engine(config: &Configuration, db: sqlx::PgPool) -> SpawnTradingEngine {
     use trading::TradingEngineCmd as T;
 
     async fn trading_engine_supervisor(mut rx: mpsc::Receiver<T>, db: sqlx::PgPool) {
@@ -104,7 +104,7 @@ pub fn spawn_trading_engine(config: &Config, db: sqlx::PgPool) -> SpawnTradingEn
         tracing::warn!("trading engine supervisor finished");
     }
 
-    let (input, output) = mpsc::channel(config.te_channel_capacity());
+    let (input, output) = mpsc::channel(config.te_channel_capacity);
     let handle = tokio::spawn(trading_engine_supervisor(output, db));
 
     SpawnTradingEngine { input, handle }

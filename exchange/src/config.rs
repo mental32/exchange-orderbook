@@ -1,16 +1,15 @@
-//! The config for the exchange.
+//! Use the [`Configuration`] struct to read platform-wide settings for the exchange.
 //!
-//! The exchange is configured using a config file. The config file is a toml file that contains the following fields:
+//! NB: the code here makes the settings universally knowable instead of separate
+//! structs for each service so `bitcoin-grpc-proxy` settings are readable from
+//! the webserver or the trading engine.
 //!
-//! - `webserver_address` - the address to bind the webserver to
-//! - `database_url` - the database url to connect to
-//! - `config_file_path` - the path to the config file
-//! - `te_channel_capacity` - the trading engine channel capacity
-//! - `eth_wallet_mnemonic` - the ethereum wallet mnemonic
-//! - `bitcoin_rpc_url` - the bitcoin rpc url
-//! - `bitcoin_rpc_auth_user` - the bitcoin rpc auth user
-//! - `bitcoin_rpc_auth_password` - the bitcoin rpc auth password
-//! - `bitcoin_wallet_name` - the bitcoin wallet name
+//! In this module there are also public constants that come in pairs of:
+//! - some `$CONFIG_VALUE` like `WEBSERVER_ADDRESS`
+//! - a default value `${CONFIG_VALUE}_DEFAULT` (notice the _default suffix)
+//!
+//! These values and names directly correspond to fields in the [`Configuration`]
+//! struct. The fields are all public the struct is plain-ol-data (POD).
 //!
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -65,7 +64,7 @@ pub fn config_file_path() -> Option<PathBuf> {
 }
 
 /// The default trading engine channel capacity.
-pub const fn default_te_channel_capacity() -> usize {
+const fn default_te_channel_capacity() -> usize {
     1024
 }
 
@@ -73,21 +72,21 @@ pub const fn default_te_channel_capacity() -> usize {
 pub const BITCOIN_RPC_URL: &str = "BITCOIN_RPC_URL";
 
 /// get the bitcoin rpc url from the environment or panic.
-pub fn bitcoin_rpc_url() -> String {
+fn bitcoin_rpc_url() -> String {
     std::env::var(BITCOIN_RPC_URL).ok().unwrap_or_else(|| {
         panic!("BITCOIN_RPC_URL env var not set");
     })
 }
 
 /// the default bitcoin grpc endpoint.
-pub fn default_bitcoin_grpc_endpoint() -> tonic::transport::Endpoint {
+fn default_bitcoin_grpc_endpoint() -> tonic::transport::Endpoint {
     tonic::transport::Endpoint::from_static("http://[::1]:50051")
 }
 /// The string key used to check the environment variable for the bitcoin **grpc** url.
 pub const BITCOIN_GRPC_ENDPOINT: &str = "BITCOIN_GRPC_ENDPOINT";
 
 /// get the bitcoin grpc url from the environment or panic.
-pub fn bitcoin_grpc_url() -> String {
+fn bitcoin_grpc_url() -> String {
     std::env::var(BITCOIN_RPC_URL).ok().unwrap_or_else(|| {
         panic!("BITCOIN_RPC_URL env var not set");
     })
@@ -96,8 +95,12 @@ pub fn bitcoin_grpc_url() -> String {
 /// The string key used to check the environment variable for the bitcoin grpc bind address.
 pub const BITCOIN_GRPC_BIND_ADDR: &str = "BITCOIN_GRPC_BIND_ADDR";
 
-/// The string key used to check the environment variable for the bitcoin grpc bind address.
+/// Default address value for [`BITCOIN_GRPC_BIND_ADDR`].
 pub const BITCOIN_GRPC_BIND_ADDR_DEFAULT: &str = "0.0.0.0:50051";
+
+fn bitcoin_grpc_bind_url_default() -> SocketAddr {
+    BITCOIN_GRPC_BIND_ADDR_DEFAULT.to_owned().parse().unwrap()
+}
 
 /// deserialize a grpc endpoint from a string.
 fn de_grpc_endpoint<'de, D>(deserializer: D) -> Result<tonic::transport::Endpoint, D::Error>
@@ -119,133 +122,88 @@ where
     serializer.serialize_str(&endpoint.uri().to_string())
 }
 
-/// The config for the exchange.
+/// The string key used to check the environment variable for the directory that stores jinja templates
+pub const JINJA_TEMPLATE_DIR: &str = "JINJA_TEMPLATE_DIR";
+
+/// The string key used to check the environment variable for the `/www` dir that stores all frontend (FE) files
+pub const FE_WEB_DIR: &str = "FE_WEB_DIR";
+
+/// application "configuration" loaded from a config file, unspecified values may use the environent variables as fallback.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Config {
+pub struct Configuration {
+    /// Specifies the address to bind the webserver socket to
     #[serde(default = "webserver_address")]
-    webserver_address: SocketAddr,
+    pub webserver_bind_addr: SocketAddr,
+    /// Specifies the database url (with credentials) to use
     #[serde(default = "database_url")]
-    database_url: String,
-    #[serde(default = "config_file_path")]
-    config_file_path: Option<PathBuf>,
+    pub database_url: String,
+    /// Configure the message channel capacity of the trading engine
     #[serde(default = "default_te_channel_capacity")]
-    te_channel_capacity: usize,
-    eth_wallet_mnemonic: Option<String>,
+    pub te_channel_capacity: usize,
+    /// Mnemonic for the exchange Ether wallet
+    pub eth_wallet_mnemonic: Option<String>,
     #[serde(default = "bitcoin_rpc_url")]
-    bitcoin_rpc_url: String,
+    /// Specifies the URL for the bitcoin-rpc service to connect to
+    pub bitcoin_rpc_url: String,
+    /// The username for auth
     #[serde(default)]
-    bitcoin_rpc_auth_user: String,
+    pub bitcoin_rpc_auth_user: String,
+    /// The password for auth
     #[serde(default)]
-    bitcoin_rpc_auth_password: String,
+    pub bitcoin_rpc_auth_password: String,
+    /// Wallet name for the exchange BTC wallet
     #[serde(default)]
-    bitcoin_wallet_name: String,
+    pub bitcoin_wallet_name: String,
+    /// Specifies the gRPC URL for the bitcoin-grpc-proxy service
     #[serde(
         deserialize_with = "de_grpc_endpoint",
         serialize_with = "ser_endpoint_to_string",
         default = "default_bitcoin_grpc_endpoint"
     )]
-    bitcoin_grpc_endpoint: tonic::transport::Endpoint,
+    pub bitcoin_grpc_endpoint: tonic::transport::Endpoint,
+    /// Specifies the address to bind the bitcoin-grpc-proxy socket to
+    #[serde(default = "bitcoin_grpc_bind_url_default")]
+    pub bitcoin_grpc_bind_addr: SocketAddr,
+    /// Get the path to the template directory for [`minijinja`] or "$CWD/templates/" if not set.
+    pub jinja_template_dir: Option<PathBuf>,
+    /// the directory that stores all frontend (FE) files like CSS, HTML fragments, robots.txt, fonts
+    pub fe_web_dir: Option<PathBuf>,
 }
 
-impl Config {
-    /// Load the config from the given toml string.
-    ///
-    /// This function is intended for use in tests.
-    ///
+impl Configuration {
+    /// load directly from a string, should only be used for tests.
     #[track_caller]
     pub fn load_from_toml(st: &str) -> Self {
         toml::from_str(st).expect("Failed to parse config file")
     }
 
-    /// Load the config from the given toml file depending on the `CONFIG_FILE_PATH` env var.
-    /// If `CONFIG_FILE_PATH` is not set, this function panics.
+    /// read the TOML from the file at `path`
     #[track_caller]
-    pub fn load_from_env() -> Self {
-        let path = config_file_path()
-            .expect("CONFIG_FILE_PATH env var not set");
-        if !path.exists() {
-            panic!("config file path does not exist");
-        }
-        let config_file_path = path
-            .canonicalize()
-            .expect("Failed to canonicalize config file path");
-        let st = std::fs::read_to_string(config_file_path).expect("Failed to read config file");
-        toml::from_str(&st).expect("Failed to parse config file")
+    pub fn load_from_path(path: &Path) -> std::io::Result<Self> {
+        let config_file_path = path.canonicalize()?;
+        let st = std::fs::read_to_string(config_file_path)?;
+        Ok(toml::from_str(&st)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?)
     }
 
-    /// diff the config with another config.
-    pub fn diff(&self, other: &Self) -> toml::map::Map<String, toml::Value> {
-        let mut map = toml::map::Map::new();
-
-        macro_rules! diff {
-            ($field:ident) => {
-                if self.$field != other.$field {
-                    map.insert(
-                        stringify!($field).to_owned(),
-                        toml::Value::try_from(&self.$field).unwrap(),
-                    );
-                }
-            };
-            // handle a list of fields
-            ($($field:ident),*) => {
-                $(diff!($field);)*
-            };
-        }
-
-        diff!(webserver_address, database_url);
-
-        map
-    }
-
-    /// Get the webserver address to bind to.
-    pub fn webserver_address(&self) -> SocketAddr {
-        self.webserver_address
-    }
-
-    /// Get the database url to connect to.
-    pub fn database_url(&self) -> &str {
-        &self.database_url
-    }
-
-    /// Get the path to the config file.
-    pub fn config_file_path(&self) -> Option<&Path> {
-        self.config_file_path.as_ref().map(|p| p.as_ref())
-    }
-
-    /// Get the trading engine channel capacity.
-    pub fn te_channel_capacity(&self) -> usize {
-        self.te_channel_capacity
-    }
-
-    /// Get the ethereum wallet mnemonic.
-    pub fn eth_wallet_mnemonic(&self) -> Option<&str> {
-        self.eth_wallet_mnemonic.as_deref()
-    }
-
-    /// Get the bitcoin rpc url.
-    pub fn bitcoin_rpc_url(&self) -> &str {
-        self.bitcoin_rpc_url.as_str()
-    }
-
-    /// Get the bitcoin rpc auth.
+    /// A tuple of the user and password for bitcoin-rpc auth
     pub fn bitcoin_rpc_auth(&self) -> (String, String) {
         let user = self.bitcoin_rpc_auth_user.clone();
         let password = self.bitcoin_rpc_auth_password.clone();
         (user, password)
     }
 
-    /// Get the bitcoin wallet name.
-    pub fn bitcoin_wallet_name(&self) -> &str {
-        self.bitcoin_wallet_name.as_str()
+    /// Get the path to the template directory for [`minijinja`] or "$CWD/templates/" if not set.
+    pub fn jinja_template_dir(&self) -> PathBuf {
+        self.jinja_template_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(std::env::var(JINJA_TEMPLATE_DIR).unwrap()))
     }
 
-    /// Get the bitcoin grpc bind address.
-    pub fn bitcoin_grpc_bind_addr(&self) -> SocketAddr {
-        BITCOIN_GRPC_BIND_ADDR_DEFAULT.to_owned().parse().unwrap()
-    }
-
-    /// Get the bitcoin grpc endpoint.
-    pub fn bitcoin_grpc_endpoint(&self) -> &tonic::transport::Endpoint {
-        &self.bitcoin_grpc_endpoint
+    /// the directory that stores all frontend (FE) files like CSS, HTML fragments, robots.txt, fonts
+    pub fn fe_web_dir(&self) -> PathBuf {
+        self.fe_web_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(std::env::var(FE_WEB_DIR).unwrap()))
     }
 }

@@ -10,11 +10,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .emit_rerun_if_changed(true)
         .file_descriptor_set_path(descriptor_path);
 
-    let protos = dbg!(glob::glob("./proto/**/*.proto")
+    let protos = glob::glob("./proto/**/*.proto")
         .expect("failed to glob for proto files")
         .filter_map(|res| res.ok())
         .map(|p| p.canonicalize().unwrap())
-        .collect::<Vec<_>>());
+        .collect::<Vec<_>>();
 
     for path in &protos {
         if path.exists() {

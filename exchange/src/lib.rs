@@ -99,7 +99,7 @@ mod spawn_trading_engine;
 
 /// Starts the exchange in fullstack mode i.e. all components are ran.
 pub fn start_fullstack(
-    config: config::Config,
+    config: config::Configuration,
     signals: signal::Signals,
 ) -> impl Future<Output = Result<(), StartFullstackError>> {
     /// create a future that, depending on the build profile, will either:
@@ -130,12 +130,12 @@ pub fn start_fullstack(
             "starting exchange in fullstack mode"
         );
 
-        tracing::info!(url = ?config.database_url(), "connecting to database");
+        tracing::info!(url = ?config.database_url, "connecting to database");
 
         let db = sqlx::postgres::PgPoolOptions::new()
             .max_connections(20)
             .min_connections(1)
-            .connect(&config.database_url())
+            .connect(&config.database_url)
             .await?;
 
         tracing::info!("preparing trading engine");
@@ -143,8 +143,8 @@ pub fn start_fullstack(
         let btc_rpc = bitcoin::connect_bitcoin_rpc(&config)
             .instrument(tracing::info_span!(
                 "bitcoind_rpc_client",
-                rpcurl = ?config.bitcoin_rpc_url(),
-                wallet = ?config.bitcoin_wallet_name(),
+                rpcurl = ?config.bitcoin_rpc_url,
+                wallet = ?config.bitcoin_wallet_name,
             ))
             .await
             .map_err(|err| StartFullstackError::BitcoinRpc(err))?;
@@ -154,12 +154,18 @@ pub fn start_fullstack(
                 .init_from_db(db.clone())
                 .await?;
 
-        let state = AppCx::new(te_tx.clone(), btc_rpc, db);
+        let state = AppCx::new(
+            te_tx.clone(),
+            btc_rpc,
+            db,
+            crate::jinja::make_jinja_env(&config),
+            config.clone(),
+        );
 
         tracing::info!("launching webserver and waiting for stop signal");
 
         let res = tokio::select! {
-            res = web::serve(config.webserver_address(), state) => res.map_err(StartFullstackError::Webserver),
+            res = web::serve(config.webserver_bind_addr, state) => res.map_err(StartFullstackError::Webserver),
             res = &mut te_handle => match res {
                 Ok(()) => {
                     tracing::info!("trading engine shutdown");

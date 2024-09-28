@@ -10,7 +10,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_line_number(true)
             .init();
 
-        let config = exchange::Config::load_from_env();
+        let config = exchange::Configuration::load_from_path(
+            exchange::config::config_file_path().unwrap().as_path(),
+        )?;
         exchange::bitcoin::start_grpc_proxy(config, exchange::signal::from_host_os())
             .await
             .map_err(|err| Box::new(err) as Box<_>)
