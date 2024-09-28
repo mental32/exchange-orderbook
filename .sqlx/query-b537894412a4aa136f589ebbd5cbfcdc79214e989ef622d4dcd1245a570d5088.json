@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO account_tx_journal (\n                        credit_account_id,\n                        debit_account_id,\n                        currency,\n                        amount,\n                        transaction_type,\n                        txid\n                    ) VALUES ($1, $2, 'BTC', $3, 'CHAIN.DEPOSIT', $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b537894412a4aa136f589ebbd5cbfcdc79214e989ef622d4dcd1245a570d5088"
+}
