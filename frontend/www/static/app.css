@@ -2,13 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-    @font-face {
-        font-family: 'Roboto';
-        font-style: italic;
-        src: url(static/fonts/RobotoMono-Italic-VariableFont_wght.ttf) format('woff2');
-    }
-}
 @keyframes float {
     0% {
         transform: translateY(0) rotate(0deg);
