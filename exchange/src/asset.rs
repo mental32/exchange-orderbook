@@ -1,5 +1,7 @@
 //! Asset types
 
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 
 /// useful as a key in a map-like structure for when there are multiple ways to key an asset
@@ -32,6 +34,26 @@ pub enum Asset {
     Ether,
 }
 
+impl FromStr for Asset {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "btc" | "BTC" => Ok(Self::Bitcoin),
+            "etc" | "ETH" => Ok(Self::Ether),
+            _ => Err(()),
+        }
+    }
+}
+
+impl std::fmt::Display for Asset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Asset::Bitcoin => write!(f, "BTC"),
+            Asset::Ether => write!(f, "ETH"),
+        }
+    }
+}
 
 /// Helper for the asset list
 pub trait ContainsAsset {
@@ -60,5 +82,6 @@ pub(crate) fn internal_asset_list() -> &'static [(AssetKey, Asset)] {
         (K::ByValue(A::Ether), A::Ether),
         (K::Static("eth"), A::Ether),
         (K::Static("ETH"), A::Ether),
-    ].as_slice()
+    ]
+    .as_slice()
 }
