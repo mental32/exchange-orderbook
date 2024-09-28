@@ -1,0 +1,65 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT * FROM account_tx_journal WHERE credit_account_id = $1 AND debit_account_id = $2 AND currency = 'BTC' AND transaction_type = 'CHAIN.DEPOSIT';",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "credit_account_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "debit_account_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "amount",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "created_at",
+        "type_info": "Timestamp"
+      },
+      {
+        "ordinal": 6,
+        "name": "transaction_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "txid",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "fff2c5970bfee66b6aa005022d4c108625241f78e6d33dbadaa874bc52e6169f"
+}
