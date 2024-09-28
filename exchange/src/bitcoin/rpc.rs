@@ -19,9 +19,8 @@ use bitcoincore_rpc_json::bitcoin::{
     secp256k1, Amount, OutPoint, PrivateKey, PublicKey, Script, ScriptBuf, SignedAmount,
     Transaction,
 };
-pub use bitcoincore_rpc_json::bitcoin;
 pub use bitcoincore_rpc_json::{
-    AddMultiSigAddressResult, AddressType, Bip9SoftforkInfo, Bip9SoftforkStatistics,
+    bitcoin, AddMultiSigAddressResult, AddressType, Bip9SoftforkInfo, Bip9SoftforkStatistics,
     Bip9SoftforkStatus, BlockRef, CreateRawTransactionInput, EstimateMode, EstimateSmartFeeResult,
     FinalizePsbtResult, FundRawTransactionOptions, FundRawTransactionResult, GetAddressInfoResult,
     GetBalancesResult, GetBlockFilterResult, GetBlockHeaderResult, GetBlockResult,
@@ -32,7 +31,7 @@ pub use bitcoincore_rpc_json::{
     ListSinceBlockResult, ListTransactionResult, ListUnspentQueryOptions, ListUnspentResultEntry,
     LoadWalletResult, PubKeyOrAddress, ScanTxOutRequest, ScanTxOutResult, SignRawTransactionInput,
     SignRawTransactionResult, Softfork, SoftforkType, TestMempoolAcceptResult,
-    WalletCreateFundedPsbtOptions, WalletCreateFundedPsbtResult
+    WalletCreateFundedPsbtOptions, WalletCreateFundedPsbtResult,
 };
 use jsonrpc_async;
 use rustc_hex::ToHex;
@@ -356,15 +355,6 @@ impl BitcoinCoreRpcHttp {
 
         let resp = self.client.send_request(req).await.map_err(Error::from);
         Ok(resp?.result()?)
-    }
-
-    /// Query an object implementing `Querable` type
-    pub async fn get_by_id<T: Queryable>(&self, id: &<T as Queryable>::Id) -> Result<T, Error>
-    where
-        T: Sync + Send,
-        <T as Queryable>::Id: Sync + Send,
-    {
-        T::query(self, id).await
     }
 
     pub async fn get_network_info(&self) -> Result<GetNetworkInfoResult, Error> {
@@ -1374,51 +1364,5 @@ impl BitcoinCoreRpcHttp {
     ) -> Result<ScanTxOutResult, Error> {
         self.send_request("scantxoutset", &["start".into(), into_json(descriptors)?])
             .await
-    }
-}
-
-/// A type that can be queried from Bitcoin Core.
-#[async_trait]
-pub trait Queryable: Sized + Send + Sync {
-    /// Type of the ID used to query the item.
-    type Id;
-    /// Query the item using `rpc` and convert to `Self`.
-    async fn query(rpc: &BitcoinCoreRpcHttp, id: &Self::Id) -> Result<Self, Error>;
-}
-
-#[async_trait]
-impl Queryable for bitcoin::blockdata::block::Block {
-    type Id = bitcoin::BlockHash;
-
-    async fn query(rpc: &BitcoinCoreRpcHttp, id: &Self::Id) -> Result<Self, Error> {
-        let rpc_name = "getblock";
-        let hex: String = rpc
-            .send_request(rpc_name, &[serde_json::to_value(id)?, 0.into()])
-            .await?;
-        let bytes: Vec<u8> = bitcoin::hashes::hex::FromHex::from_hex(&hex)?;
-        Ok(bitcoin::consensus::encode::deserialize(&bytes)?)
-    }
-}
-
-#[async_trait]
-impl Queryable for bitcoin::blockdata::transaction::Transaction {
-    type Id = bitcoin::Txid;
-
-    async fn query(rpc: &BitcoinCoreRpcHttp, id: &Self::Id) -> Result<Self, Error> {
-        let rpc_name = "getrawtransaction";
-        let hex: String = rpc
-            .send_request(rpc_name, &[serde_json::to_value(id)?])
-            .await?;
-        let bytes: Vec<u8> = bitcoin::hashes::hex::FromHex::from_hex(&hex)?;
-        Ok(bitcoin::consensus::encode::deserialize(&bytes)?)
-    }
-}
-
-#[async_trait]
-impl Queryable for Option<GetTxOutResult> {
-    type Id = bitcoin::OutPoint;
-
-    async fn query(rpc: &BitcoinCoreRpcHttp, id: &Self::Id) -> Result<Self, Error> {
-        rpc.get_tx_out(&id.txid, id.vout, Some(true)).await
     }
 }

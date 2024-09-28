@@ -4,15 +4,41 @@ package bitcoincore;
 
 service BitcoinCoreRpc {
     rpc GetNewAddress(GetNewAddressRequest) returns (GetNewAddressResponse);
-    rpc GetBalance(GetNewAddressRequest) returns (GetBalanceResponse);
+    rpc ListTransactions(ListTransactionsRequest) returns (ListTransactionsResponse);
 }
 
-message GetBalanceRequest {
-    string address = 1;
+message ListTransactionsRequest {
+    optional string label = 1;
+    optional int32 count = 2;
+    optional int32 skip = 3;
+    optional bool include_watch_only = 4;
 }
 
-message GetBalanceResponse {
-    string balance = 1;
+message ListTransactionsResponse {
+    repeated Transaction transactions = 1;
+
+    message Transaction {
+        // WalletTxInfo
+        int32 confirmations = 1;
+        optional string blockhash = 2;
+        optional int32 blockindex = 3;
+        optional int32 blocktime = 4;
+        optional int32 blockheight = 5;
+        string txid = 6;
+        int32 time = 7;
+        int32 timereceived = 8;
+        string bip125_replaceable = 9;
+        // GetTransactionResultDetail
+        optional string address = 10;
+        string category = 11;
+        double amount = 12;
+        optional double fee = 13;
+        int32 vout = 14;
+        optional bool abandoned = 15;
+        //
+        optional bool trusted = 16;
+        optional string comment = 17;
+    }
 }
 
 message GetNewAddressRequest {

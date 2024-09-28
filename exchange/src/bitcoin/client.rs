@@ -1,6 +1,7 @@
 use tonic::transport::Endpoint;
 
 use super::proto::bitcoin_core_rpc_client::BitcoinCoreRpcClient;
+use super::proto::GetNewAddressRequest;
 
 // async fn bitcoind_rpc_client(
 //     config: &Config,
@@ -45,13 +46,14 @@ enum Inner {
     Mock,
 }
 
+#[allow(missing_docs)]
 impl BitcoinRpcClient {
-    /// Create a new bitcoin rpc client.
+    /// A new bitcoin rpc client that connects to the supplied [`Endpoint`]
     pub fn new_grpc(
         endpoint: Endpoint,
     ) -> impl std::future::Future<Output = Result<Self, tonic::transport::Error>> {
         async move {
-            let bitcoin_core_rpc_client = BitcoinCoreRpcClient::connect(dbg!(endpoint)).await?;
+            let bitcoin_core_rpc_client = BitcoinCoreRpcClient::connect(endpoint).await?;
             tracing::info!("connected to bitcoin core rpc");
             Ok(Self(Inner::Grpc(bitcoin_core_rpc_client)))
         }
@@ -60,5 +62,26 @@ impl BitcoinRpcClient {
     /// Create a dummy client used for testing
     pub fn new_mock() -> Self {
         Self(Inner::Mock)
+    }
+
+    /// Generate a new wallet address
+    pub async fn get_new_address(
+        &mut self,
+        request: GetNewAddressRequest,
+    ) -> Result<tonic::Response<super::proto::GetNewAddressResponse>, tonic::Status> {
+        match &mut self.0 {
+            Inner::Grpc(grpc) => grpc.get_new_address(request).await,
+            Inner::Mock => panic!(),
+        }
+    }
+
+    pub async fn list_transactions(
+        &mut self,
+        request: super::proto::ListTransactionsRequest,
+    ) -> Result<tonic::Response<super::proto::ListTransactionsResponse>, tonic::Status> {
+        match &mut self.0 {
+            Inner::Grpc(grpc) => grpc.list_transactions(request).await,
+            Inner::Mock => panic!(),
+        }
     }
 }
