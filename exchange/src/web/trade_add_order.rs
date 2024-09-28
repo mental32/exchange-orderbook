@@ -73,10 +73,8 @@ pub async fn f(
         }
     };
 
-    let _deferred_revert = reserved_funds.defer_revert(
-        tokio::runtime::Handle::current(),
-        state.db(),
-    );
+    let _deferred_revert =
+        reserved_funds.defer_revert(tokio::runtime::Handle::current(), state.db());
 
     let order_uuid = response.wait().await;
 

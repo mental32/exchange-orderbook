@@ -1,11 +1,10 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    Extension, Json,
-};
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::{Extension, Json};
 
-use super::{middleware::auth::UserUuid, InternalApiState};
+use super::middleware::auth::UserUuid;
+use super::InternalApiState;
 
 pub struct WithdrawTransfer {
     currency: String,
@@ -46,7 +45,6 @@ pub async fn withdraw_transfer(
         Ok(_) => todo!(),
         Err(_) => todo!(),
     };
-
 
     // check if max_fee applies
 
