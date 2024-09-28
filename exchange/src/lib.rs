@@ -24,59 +24,22 @@ use std::future::Future;
 use std::sync::Arc;
 
 use thiserror::Error;
-
-pub mod test;
-
-pub mod config;
-pub use config::Config;
-
-pub(crate) mod password {
-    use argon2::password_hash::PasswordHashString;
-    use argon2::PasswordHash;
-    use argon2::PasswordHasher;
-    use serde::{Deserialize, Deserializer};
-
-    #[derive(Deserialize, Clone)]
-    pub struct Password(pub(crate) String);
-
-    impl std::fmt::Debug for Password {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_tuple("Password").finish()
-        }
-    }
-
-    pub fn de_password_from_str<'de, D>(d: D) -> Result<Password, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        todo!()
-    }
-
-    impl Password {
-        pub fn argon2_hash_password(
-            &self,
-        ) -> Result<PasswordHashString, argon2::password_hash::Error> {
-            let argon2 = argon2::Argon2::default();
-            let salt = argon2::password_hash::SaltString::generate(&mut rand::rngs::OsRng);
-            let password_hash = argon2.hash_password(self.0.as_bytes(), &salt)?;
-            Ok(password_hash.serialize())
-        }
-    }
-}
-
-pub mod asset;
-pub use asset::Asset;
 use tracing::Instrument;
 
-use crate::app_cx::AppCx;
-
+pub mod asset;
 pub mod bitcoin;
-
+pub mod config;
+pub mod jinja;
 pub mod signal;
+pub mod test;
 pub mod trading;
 pub mod web;
+pub use asset::Asset;
+pub use config::Configuration;
 
+pub(crate) mod password;
 pub(crate) mod app_cx;
+use crate::app_cx::AppCx;
 
 /// Error returned by [`start_fullstack`].
 #[derive(Debug, Error)]

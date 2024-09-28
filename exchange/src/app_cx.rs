@@ -1,137 +1,53 @@
+//! "app_cx" is short for "application context" used to access and share access to other core parts.
+//!
 //! "app_cx" is a horrible name, but I can't think of anything better. Basically
 //! it's a struct that holds all the data/refs that the different tasks need
 //! access to. It's a bit like a global variable. app_cx is short for "application context"
 //!
-//! it is also a facade for the different components of the exchange. For
+//! it is a facade for the different components of the exchange. For
 //! example, instead of calling `te_tx.send(TradingEngineCmd::PlaceOrder { .. })`
 //! you would call `app.place_order(..)`.
 //!
+use std::collections::HashMap;
+use std::net::IpAddr;
 use std::num::NonZeroU64;
+use std::path::Path;
+use std::str::FromStr as _;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use argon2::password_hash::PasswordHashString;
-use argon2::PasswordHasher;
-use asset::{internal_asset_list, AssetKey};
+use argon2::{Argon2, PasswordHasher, PasswordVerifier as _};
 use atomic::Atomic;
+use email_address::EmailAddress;
 use futures::TryFutureExt;
-use password::Password;
-use sqlx::PgPool;
+use mime_guess::MimeGuess;
+use minijinja_autoreload::AutoReloader;
+use serde::Serialize;
+use sqlx::{Executor as _, PgPool};
+use thiserror::Error;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+use crate::asset::{internal_asset_list, AssetKey};
 use crate::bitcoin::BitcoinRpcClient;
+use crate::password::Password;
 use crate::trading::{
-    CancelOrder, OrderSide, OrderUuid, PlaceOrder, PlaceOrderResult, TradeCmd, TradingEngineCmd,
-    TradingEngineError, TradingEngineTx,
+    CancelOrder, OrderSide, OrderUuid, PlaceOrder, PlaceOrderResult, TeResponse as Response,
+    TradeCmd, TradingEngineCmd, TradingEngineError, TradingEngineTx,
 };
 use crate::web::TradeAddOrder;
+use crate::{Asset, Configuration};
 
-use super::*;
+mod defer_guard;
+pub use defer_guard::{defer, DeferGuard};
 
-pub struct DeferGuard<F: FnMut()> {
-    f: F,
-    active: bool,
-}
+mod reserve_ok;
+pub use reserve_ok::ReserveOk;
 
-impl<F: FnMut()> Drop for DeferGuard<F> {
-    fn drop(&mut self) {
-        if self.active {
-            (self.f)();
-        }
-    }
-}
-
-impl<F: FnMut()> DeferGuard<F> {
-    pub fn cancel(mut self) {
-        self.active = false;
-    }
-}
-
-#[must_use]
-pub fn defer<F: FnMut()>(f: F) -> DeferGuard<F> {
-    DeferGuard { f, active: true }
-}
-
-#[derive(Debug, Clone)]
-pub struct AppCx {
-    /// a mpsc sender to the trading engine supervisor.
-    te_tx: TradingEngineTx,
-    /// a client for the bitcoin core rpc.
-    bitcoind_rpc: BitcoinRpcClient,
-    /// a pool of connections to the database.
-    db: sqlx::PgPool,
-    /// Read-only data or data that has interior mutability.
-    inner_ro: Arc<Inner>,
-    pub assets: &'static [(AssetKey, Asset)],
-}
-
-#[derive(Debug)]
 struct Inner {
     te_state: Atomic<TradingEngineState>,
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[repr(u64)]
-pub enum TradingEngineState {
-    #[default]
-    Suspended = 0,
-    Running,
-    ReduceOnly,
-}
-
-unsafe impl bytemuck::NoUninit for TradingEngineState {}
-
-#[derive(Debug, Clone)]
-pub struct ReserveOk {
-    pub row_id: u32,
-    pub previous_balance: NonZeroU64,
-    pub new_balance: Option<NonZeroU64>,
-}
-
-impl ReserveOk {
-    pub fn defer_revert(
-        self,
-        handle: tokio::runtime::Handle,
-        db: sqlx::PgPool,
-    ) -> DeferGuard<impl FnMut()> {
-        defer(move || {
-            let this = self.clone();
-            let db = db.clone();
-
-            handle.spawn(async move {
-                let fut = this.revert(&db);
-
-                if let Err(err) = fut.await {
-                    tracing::warn!(?err, "failed to revert reserved funds");
-                }
-            });
-        })
-    }
-
-    pub fn revert(
-        self,
-        db: &sqlx::PgPool,
-    ) -> impl std::future::Future<Output = Result<i32, sqlx::Error>> + '_ {
-        sqlx::query!(
-            r#"
-            -- First, fetch the required details from the original row
-            WITH original_tx AS (
-            SELECT credit_account_id, debit_account_id, currency, amount
-                FROM account_tx_journal
-                WHERE id = $1
-            )
-            -- Then, insert the inverse transaction
-            INSERT INTO account_tx_journal (credit_account_id, debit_account_id, currency, amount, transaction_type)
-            SELECT debit_account_id, credit_account_id, currency, amount, 'revert reserve asset'
-            FROM original_tx
-            RETURNING id
-            "#,
-            self.row_id as i32
-        )
-        .fetch_one(db)
-        .map_ok(|rec| rec.id)
-    }
+    jinja: crate::jinja::Jinja,
 }
 
 #[derive(Debug, Error)]
@@ -160,82 +76,386 @@ pub enum PlaceOrderError {
 }
 
 #[derive(Debug, Error)]
+pub enum VerifyLoginDetailsError {
+    #[error("failed to authorize details")]
+    Unauthorized,
+    #[error("{0}")]
+    Other(#[from] sqlx::Error),
+}
+
+#[derive(Debug, Error)]
 pub enum CancelOrderError {
     #[error("trading engine unresponsive")]
     TradingEngineUnresponsive,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error)]
 pub enum CreateUserError {
     #[error("password hash error")]
     PasswordHashError,
     #[error("email has already been used")]
     EmailUniqueViolation(sqlx::Error),
     #[error("sqlx error")]
-    GenericSqlxError(#[from] sqlx::Error),
+    Sqlx(#[from] sqlx::Error),
 }
 
-#[must_use]
-pub struct Response<T, E = TradingEngineError>(pub oneshot::Receiver<Result<T, E>>);
+#[derive(Debug, Error)]
+pub enum UserDetailsError {
+    #[error("sqlx: (0]")]
+    Sqlx(#[from] sqlx::Error),
+}
 
-impl<T, E> Response<T, E> {
-    pub async fn wait(self) -> Option<Result<T, E>> {
-        self.0.await.ok()
+#[derive(Debug, Serialize)]
+pub struct UserWalletAddr {
+    text: String,
+    currency: String,
+    kind: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserAccountDetails {
+    amount: String,
+    deposit_address: Option<String>,
+    withrawal_addresses: Vec<UserWalletAddr>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserPortfolio {
+    value: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserDetails {
+    id: uuid::Uuid,
+    name: String,
+    role: String,
+    accounts: HashMap<String, UserAccountDetails>,
+    portfolio: UserPortfolio,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[repr(u64)]
+enum TradingEngineState {
+    #[default]
+    Suspended = 0,
+    Running,
+    ReduceOnly,
+}
+
+unsafe impl bytemuck::NoUninit for TradingEngineState {}
+
+#[derive(Debug)]
+pub struct UserAccount {}
+
+#[derive(Debug, Clone)]
+pub struct AppCx {
+    /// a mpsc sender to the trading engine supervisor.
+    te_tx: TradingEngineTx,
+    /// a client for the bitcoin core rpc.
+    pub(crate) bitcoind_rpc: BitcoinRpcClient,
+    /// a pool of connections to the database.
+    db: sqlx::PgPool,
+    /// Read-only data or data that has interior mutability.
+    inner_ro: Arc<Inner>,
+    /// The service configuration
+    config: Configuration,
+    /// The list of active assets
+    pub(crate) assets: &'static [(AssetKey, Asset)],
+}
+
+impl std::fmt::Debug for Inner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Inner")
+            .field("te_state", &self.te_state)
+            .field("jinja", &"")
+            .finish()
     }
 }
 
 impl AppCx {
-    pub fn new(te_tx: TradingEngineTx, btc_rpc: BitcoinRpcClient, db: sqlx::PgPool) -> Self {
+    pub fn new(
+        te_tx: TradingEngineTx,
+        btc_rpc: BitcoinRpcClient,
+        db: sqlx::PgPool,
+        jinja: crate::jinja::Jinja,
+        config: Configuration,
+    ) -> Self {
         Self {
             te_tx,
             bitcoind_rpc: btc_rpc,
             db,
             inner_ro: Arc::new(Inner {
                 te_state: Atomic::new(TradingEngineState::Running),
+                jinja,
             }),
             assets: internal_asset_list(),
+            config,
         }
+    }
+
+    pub fn config(&self) -> &Configuration {
+        &self.config
+    }
+
+    pub fn jinja(&self) -> &crate::jinja::Jinja {
+        &self.inner_ro.jinja
     }
 
     pub fn db(&self) -> PgPool {
         self.db.clone()
     }
 
-    /// get the state of the trading engine
     pub fn trading_engine_state(&self) -> TradingEngineState {
         self.inner_ro.te_state.load(Ordering::Relaxed)
     }
 
-    /// set the state of the trading engine
     pub fn set_trading_engine_state(&self, state: TradingEngineState) {
         self.inner_ro.te_state.store(state, Ordering::SeqCst)
     }
+}
 
-    async fn calculate_balance(
+impl AppCx {
+    pub async fn list_withdrawal_addrs(
+        &self,
+        user_id: uuid::Uuid,
+    ) -> Result<Vec<(String, String)>, sqlx::Error> {
+        Ok(sqlx::query!(
+            "SELECT address_text, currency
+                FROM user_addresses
+                WHERE user_id = $1
+                AND kind = 'withdrawal';",
+            user_id
+        )
+        .fetch_all(&self.db)
+        .await?
+        .into_iter()
+        .map(|rec| (rec.address_text, rec.currency))
+        .collect())
+    }
+
+    pub async fn list_deposit_addrs(
+        &self,
+        user_id: uuid::Uuid,
+    ) -> Result<Vec<(String, String)>, sqlx::Error> {
+        Ok(sqlx::query!(
+            "SELECT address_text, currency
+                FROM user_addresses
+                WHERE user_id = $1
+                AND kind = 'deposit';",
+            user_id
+        )
+        .fetch_all(&self.db)
+        .await?
+        .into_iter()
+        .map(|rec| (rec.address_text, rec.currency))
+        .collect())
+    }
+
+    pub async fn verify_login_details(
+        &self,
+        email: &EmailAddress,
+        password: &Password,
+    ) -> Result<Uuid, VerifyLoginDetailsError> {
+        let db = self.db();
+        let rec = match sqlx::query!(
+            // language=PostgreSQL
+            r#"
+            SELECT id, password_hash FROM users
+            WHERE email = $1
+            "#,
+            email.as_str()
+        )
+        .fetch_one(&db)
+        .await
+        {
+            Ok(rec) => rec,
+            Err(sqlx::Error::RowNotFound) => {
+                tracing::info!(email = ?email, "user email not found");
+                return Err(VerifyLoginDetailsError::Unauthorized);
+            }
+            Err(err) => {
+                tracing::error!(?err, "failed to query user");
+                return Err(VerifyLoginDetailsError::Other(err));
+            }
+        };
+
+        tracing::info!(user_id = ?rec.id, "user found");
+
+        if tokio::task::spawn_blocking({
+            let from_utf8 = &String::from_utf8(rec.password_hash).unwrap();
+            let phs = PasswordHashString::from_str(from_utf8.as_str()).unwrap();
+            let password_as_bytes = password.0.as_bytes().to_owned();
+
+            move || {
+                Argon2::default()
+                    .verify_password(&password_as_bytes, &phs.password_hash())
+                    .is_err()
+            }
+        })
+        .await
+        .unwrap_or(false)
+        {
+            tracing::info!("password mismatch");
+            return Err(VerifyLoginDetailsError::Unauthorized);
+        }
+
+        Ok(rec.id)
+    }
+
+    pub async fn create_session(
         &self,
         user_uuid: Uuid,
+        ip_address: Option<IpAddr>,
+        user_agent: Option<String>,
+    ) -> Result<String, sqlx::Error> {
+        // generate a session token and store it
+        let session_token = {
+            let mut rng = rand::thread_rng();
+            let mut bytes = [0u8; 32];
+            rand::Rng::fill(&mut rng, &mut bytes[..]);
+            hex::encode(bytes)
+        };
+
+        sqlx::query!(
+            "INSERT INTO session_tokens (token, max_age, user_id, ip_address, user_agent) VALUES ($1, $2, $3, $4, $5);",
+            session_token.as_bytes(),
+            3600,
+            user_uuid,
+            ip_address.map(|ip| ip.to_string()),
+            user_agent
+        )
+        .execute(&self.db())
+        .await?;
+
+        Ok(session_token)
+    }
+
+    pub async fn calculate_balance_from_accounting(
+        &self,
+        user_id: Uuid,
         currency: &str,
     ) -> Result<Option<NonZeroU64>, sqlx::Error> {
         let rec = sqlx::query!(
             r#"
             SELECT calculate_balance($1, $2);"#,
-            user_uuid.to_string(),
+            user_id.to_string(),
             currency
         )
         .fetch_one(&self.db)
         .await?
         .calculate_balance;
-        tracing::trace!(?rec, %user_uuid, ?currency, "balance");
+        tracing::trace!(?rec, %user_id, ?currency, "balance");
         Ok(NonZeroU64::new(rec.unwrap_or_default() as u64))
     }
 
-    async fn reserve_by_asset(
+    pub async fn update_user_accounts(&self, user_id: Uuid) {
+        async fn check_bitcoind(mut cx: AppCx, user_id: Uuid) -> Result<(), sqlx::Error> {
+            use crate::bitcoin::proto::ListTransactionsRequest;
+
+            let _db = cx.db();
+            let mut db = _db.begin().await?;
+
+            let btc_account_rec = sqlx::query!(
+                r#"SELECT id FROM accounts WHERE source_type = 'crypto' AND source_id = 'bitcoin';"#
+            )
+            .fetch_one(&mut *db)
+            .await?;
+
+            let user_account_rec = sqlx::query!(
+                "SELECT * FROM accounts WHERE source_id = $1 AND currency = 'BTC' AND source_type = 'user';",
+                user_id.to_string()
+            )
+            .fetch_one(&mut *db)
+            .await?;
+
+            let mut tx_journal = sqlx::query!("SELECT * FROM account_tx_journal WHERE credit_account_id = $1 AND debit_account_id = $2 AND currency = 'BTC' AND transaction_type = 'CHAIN.DEPOSIT';", user_account_rec.id, btc_account_rec.id)
+                .fetch_all(&mut *db)
+                .await?
+                .into_iter()
+                .map(|rec| (rec.txid.clone(), rec))
+                .collect::<HashMap<_, _>>();
+
+            let txs = cx
+                .bitcoind_rpc
+                .list_transactions(ListTransactionsRequest {
+                    label: Some(user_id.to_string()),
+                    count: None,
+                    skip: None,
+                    include_watch_only: None,
+                })
+                .await
+                .unwrap()
+                .into_inner();
+
+            for tx in txs.transactions {
+                if tx_journal.contains_key(&tx.txid) {
+                    continue;
+                }
+
+                let res = sqlx::query!(
+                    r#"INSERT INTO account_tx_journal (
+                        credit_account_id,
+                        debit_account_id,
+                        currency,
+                        amount,
+                        transaction_type,
+                        txid
+                    ) VALUES ($1, $2, 'BTC', $3, 'CHAIN.DEPOSIT', $4)"#,
+                    user_account_rec.id,
+                    btc_account_rec.id,
+                    tx.amount as i64,
+                    tx.txid
+                )
+                .execute(&mut *db)
+                .await?;
+            }
+
+            db.commit().await?;
+
+            Ok(())
+        }
+
+        let check_bitcoind_fut = check_bitcoind(self.clone(), user_id.clone());
+        let (res,) = tokio::join!(check_bitcoind_fut);
+    }
+
+    pub async fn user_balance(&self, user_id: Uuid) -> Result<HashMap<String, i64>, sqlx::Error> {
+        let mut db = self.db.begin().await?;
+        let mut details = HashMap::new();
+
+        let vec = sqlx::query!(
+            "SELECT DISTINCT currency FROM accounts WHERE source_id = $1;",
+            user_id.to_string()
+        )
+        .fetch_all(&mut *db)
+        .await?;
+
+        for rec in vec {
+            if let Ok(bal) = sqlx::query!(
+                r#"
+                SELECT calculate_balance($1, $2);"#,
+                user_id.to_string(),
+                rec.currency.to_string()
+            )
+            .fetch_one(&mut *db)
+            .await
+            {
+                details.insert(rec.currency, bal.calculate_balance.unwrap_or(0));
+            }
+        }
+
+        Ok(details)
+    }
+
+    pub async fn reserve_by_asset(
         &self,
         user_uuid: Uuid,
         quantity: std::num::NonZeroU32,
         currency: &str,
     ) -> Result<ReserveOk, ReserveError> {
-        let balance = self.calculate_balance(user_uuid, currency).await?;
+        let balance = self
+            .calculate_balance_from_accounting(user_uuid, currency)
+            .await?;
 
         let balance = match balance {
             Some(i) if i.get() >= quantity.get() as u64 => i,
@@ -260,7 +480,9 @@ impl AppCx {
 
         tracing::trace!(id = ?rec.id, %user_uuid, "reserved USD fiat from user account");
 
-        let new_balance = self.calculate_balance(user_uuid, currency).await?;
+        let new_balance = self
+            .calculate_balance_from_accounting(user_uuid, currency)
+            .await?;
         if let Some(nb) = new_balance {
             assert!(nb.get() < balance.get());
         }
@@ -367,52 +589,133 @@ impl AppCx {
         email: &str,
         password_hash: PasswordHashString,
     ) -> Result<Uuid, CreateUserError> {
-        // duplicate emails should raise a unique violation
-        if let Err(err) = sqlx::query!(
+        match sqlx::query!(
             r#"
             INSERT INTO users (name, email, password_hash)
-            VALUES (
-                    $1,
-                    $2,
-                    $3
-                );
+            VALUES ($1, $2, $3)
+            RETURNING id
             "#,
             name,
             email,
             password_hash.as_bytes(),
         )
-        .execute(&self.db())
+        .fetch_one(&self.db())
         .await
         {
-            return Err(match err {
+            Ok(record) => Ok(record.id),
+            Err(err) => Err(match err {
                 sqlx::Error::Database(ref dbe) if dbe.is_unique_violation() => {
                     CreateUserError::EmailUniqueViolation(err)
                 }
-                _ => CreateUserError::GenericSqlxError(err),
-            });
+                _ => CreateUserError::Sqlx(err),
+            }),
+        }
+    }
+
+    pub async fn fetch_user_details(
+        &self,
+        user_id: uuid::Uuid,
+    ) -> Result<UserDetails, UserDetailsError> {
+        let mut dtx = self.db.begin().await?;
+        let _ = (*dtx).execute("SET TRANSACTION READ ONLY").await?;
+
+        let rec = sqlx::query!(
+            r#"SELECT id, name, role as "role: String"
+            FROM users
+            WHERE id = $1"#,
+            user_id
+        )
+        .fetch_one(&mut *dtx)
+        .await?;
+
+        let mut addrs = sqlx::query!(
+            r#"SELECT *
+            FROM user_addresses
+            WHERE user_id = $1"#,
+            user_id
+        )
+        .fetch_all(&mut *dtx)
+        .await?;
+
+        let mut accounts = HashMap::new();
+        for rec in addrs {
+            let entry = accounts
+                .entry(rec.currency.clone())
+                .or_insert(UserAccountDetails {
+                    amount: Default::default(),
+                    deposit_address: None,
+                    withrawal_addresses: vec![],
+                });
+
+            if rec.kind == "deposit" {
+                entry.deposit_address.replace(rec.address_text.clone());
+            } else {
+                entry.withrawal_addresses.push(UserWalletAddr {
+                    text: rec.address_text,
+                    currency: rec.currency,
+                    kind: rec.kind,
+                });
+            }
         }
 
-        let rec = sqlx::query!("SELECT id FROM users WHERE email = $1", email)
-            .fetch_one(&self.db())
-            .await?;
+        let details = UserDetails {
+            name: rec.name,
+            id: rec.id,
+            role: rec.role,
+            accounts,
+            portfolio: UserPortfolio { value: 0 }
+        };
 
-        Ok(rec.id)
+        dtx.commit().await?;
+
+        Ok(details)
+    }
+
+    pub async fn fetch_user_account(
+        &self,
+        user_id: Uuid,
+        asset: Asset,
+    ) -> Result<Option<UserAccount>, sqlx::Error> {
+        let rec = match sqlx::query!(
+            r#"SELECT id FROM accounts
+            WHERE currency = $1
+                AND source_type = 'user'
+                AND source_id = $2"#,
+            asset.to_string(),
+            user_id.to_string()
+        )
+        .fetch_one(&self.db)
+        .await
+        {
+            Ok(rec) => rec,
+            Err(sqlx::Error::RowNotFound) => return Ok(None),
+            Err(err) => return Err(err),
+        };
+
+        Ok(Some(UserAccount {}))
     }
 }
 
 #[cfg(test)]
 mod test {
-    use spawn_trading_engine::spawn_trading_engine;
+    use crate::jinja::make_jinja_env;
+    use crate::spawn_trading_engine::spawn_trading_engine;
 
     use super::*;
 
     async fn make_app_cx_fixture(db: sqlx::PgPool) -> AppCx {
-        let config = Config::load_from_toml("");
+        let config = Configuration::load_from_toml("");
         let (te_tx, te_handle) = spawn_trading_engine(&config, db.clone())
             .init_from_db(db.clone())
             .await
             .unwrap();
-        AppCx::new(te_tx, BitcoinRpcClient::new_mock(), db)
+        AppCx::new(
+            te_tx,
+            BitcoinRpcClient::new_mock(),
+            db,
+            make_jinja_env(&config),
+            config,
+        )
     }
 
     #[sqlx::test(migrations = "../migrations")]
@@ -483,7 +786,10 @@ mod test {
             .unwrap();
         }
 
-        let balance = app_cx.calculate_balance(user_uuid, "BTC").await.unwrap();
+        let balance = app_cx
+            .calculate_balance_from_accounting(user_uuid, "BTC")
+            .await
+            .unwrap();
 
         assert_eq!(balance, NonZeroU64::new(total_credits as u64), "Expected balance does not match calculated balance: user={user_uuid} balance={balance:?} expected={total_credits:?}");
     }
