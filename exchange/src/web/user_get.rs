@@ -1,8 +1,9 @@
 use super::InternalApiState;
 
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::{extract::State, Json};
+use axum::Json;
 
 use serde::Deserialize;
 use serde_json::json;
@@ -25,10 +26,7 @@ impl IntoResponse for UserGetError {
     fn into_response(self) -> axum::response::Response {
         match self {
             UserGetError::UserNotFound => (StatusCode::NOT_FOUND, "user not found").into_response(),
-            UserGetError::Sqlx(err) => {
-                tracing::error!(?err, "sqlx error");
-                StatusCode::INTERNAL_SERVER_ERROR.into_response()
-            }
+            UserGetError::Sqlx(err) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }
 }
