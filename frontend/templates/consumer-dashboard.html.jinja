@@ -1,0 +1,149 @@
+{% extends "layout.html.jinja" %}
+
+{% block body %}
+<div id="app" class="bg-base-100">
+    <header id="app-header" class="navbar box-border border h-[4vh] border-[oklch(var(--b3))]">
+        <div class="navbar-start">
+            <a href="/" class="btn btn-ghost text-xl">Crypto Exchange</a>
+
+        </div>
+        <div class="navbar-end flex gap-2">
+            <label class="flex cursor-pointer gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="5" />
+                    <path
+                        d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4" />
+                </svg>
+                <input type="checkbox" value="dark" class="toggle theme-controller" />
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                </svg>
+            </label>
+            <button class="btn btn-neutral btn-active btn-xl">Buy Crypto</button>
+            <div class="dropdown dropdown-bottom dropdown-end pr-2">
+                <div tabindex="0" role="button" class="avatar placeholder">
+                    <div class="bg-neutral text-neutral-content w-12 rounded-full">
+                        <span>JS</span>
+                    </div>
+                </div>
+                <ul tabindex="0" class="dropdown-content menu bg-base-100 rounded-box z-[1000] p-[8px] shadow w-[186px]">
+                    <li><a class="justify-start border-0 flex flex-row gap-x-[8px] items-center text-center pl-1"><svg
+                                xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                                stroke="currentColor" class="size-6">
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 0 1 1.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.559.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.894.149c-.424.07-.764.383-.929.78-.165.398-.143.854.107 1.204l.527.738c.32.447.269 1.06-.12 1.45l-.774.773a1.125 1.125 0 0 1-1.449.12l-.738-.527c-.35-.25-.806-.272-1.203-.107-.398.165-.71.505-.781.929l-.149.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.269-1.45-.12l-.773-.774a1.125 1.125 0 0 1-.12-1.45l.527-.737c.25-.35.272-.806.108-1.204-.165-.397-.506-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.108-1.204l-.526-.738a1.125 1.125 0 0 1 .12-1.45l.773-.773a1.125 1.125 0 0 1 1.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894Z" />
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                            </svg>Settings
+                        </a></li>
+                    <div class="divider bg-base-100 m-1"></div>
+                    <li><a class="justify-start border-0 flex flex-row gap-x-[8px] items-center text-center pl-1"><svg
+                                xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                                stroke="currentColor" class="size-6">
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
+                            </svg>
+                            Sign out</a></li>
+                </ul>
+            </div>
+        </div>
+    </header>
+    <div class="flex flex-cols w-full h-screen">
+        <div>
+            <nav class="xl:w-[240px] xl:pt-10 xl:px-2 h-screen pr-0 border-r border-[oklch(var(--b3))] flex flex-col">
+                <ul class="menu gap-1 pt-[40px]">
+                    <li>
+                        <a hx-get="/c" hx-vals='{"t": "home"}' hx-target="#dashboard-content" hx-select="#dashboard-content" hx-push-url="true"
+                            class="active justify-start xl:ml-8 border-0 flex xl:flex-row flex-col gap-x-[12px] items-center text-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                                stroke="currentColor" class="size-6">
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
+                            </svg>
+                            Home
+                        </a>
+                    </li>
+                    <li>
+                        <a hx-get="/c" hx-vals='{"t": "portfolio"}' hx-target="#dashboard-content" hx-select="#dashboard-content"
+                            hx-push-url="true"
+                            class="justify-start xl:ml-8 border-0 flex xl:flex-row flex-col gap-x-[12px] items-center text-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                                stroke="currentColor" class="size-6">
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="M21 12a2.25 2.25 0 0 0-2.25-2.25H15a3 3 0 1 1-6 0H5.25A2.25 2.25 0 0 0 3 12m18 0v6a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 18v-6m18 0V9M3 12V9m18 0a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 9m18 0V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v3" />
+                            </svg>
+                            Portfolio
+                        </a>
+                    </li>
+                    <li>
+                        <a hx-get="/c" hx-vals='{"t": "explore"}' hx-target="#dashboard-content" hx-select="#dashboard-content"
+                            hx-push-url="true" hx-swap="outerHTML"
+                            class="justify-start xl:ml-8 border-0 flex xl:flex-row flex-col gap-x-[12px] items-center text-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                                stroke="currentColor" class="size-6">
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+                            </svg>
+                            Explore
+                        </a>
+                    </li>
+                    <li>
+                        <a hx-get="/c" hx-vals='{"t": "transactions"}' hx-target="#dashboard-content" hx-select="#dashboard-content"
+                            hx-push-url="true" hx-swap="outerHTML"
+                            class="justify-start xl:ml-8 border-0 flex xl:flex-row flex-col gap-x-[12px] items-center text-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                                stroke="currentColor" class="size-6">
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                            </svg>
+                            Transactions
+                        </a>
+                    </li>
+                    <div class="divider bg-base-100"></div>
+                    <li>
+                        <a hx-get="/c" hx-vals='{"t": "deposit"}' hx-target="#dashboard-content" hx-select="#dashboard-content"
+                            hx-push-url="true" hx-swap="outerHTML"
+                            class="justify-start xl:ml-8 border-0 flex xl:flex-row flex-col gap-x-[12px] items-center text-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                                stroke="currentColor" class="size-6">
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5 5.25 5.25" />
+                            </svg>
+                            Deposit cash
+                        </a>
+                    </li>
+                    <li>
+                        <a hx-get="/c" hx-vals='{"t": "withdraw"}' hx-target="#dashboard-content" hx-select="#dashboard-content"
+                            hx-push-url="true" hx-swap="outerHTML"
+                            class="justify-start xl:ml-8 border-0 flex xl:flex-row flex-col gap-x-[12px] items-center text-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                                stroke="currentColor" class="size-6">
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
+                            </svg>
+                            Withdraw cash
+                        </a>
+                    </li>
+                    <li>
+                        <a hx-get="/c" hx-vals='{"t": "transfer"}' hx-target="#dashboard-content" hx-select="#dashboard-content"
+                            hx-push-url="true" hx-swap="outerHTML"
+                            class="justify-start xl:ml-8 border-0 flex xl:flex-row flex-col gap-x-[12px] items-center text-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+                                stroke="currentColor" class="size-6">
+                                <path stroke-linecap="round" stroke-linejoin="round"
+                                    d="M7.5 21 3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+                            </svg>
+                            Transfer crypto
+                        </a>
+                    </li>
+                </ul>
+            </nav>
+        </div>
+        {% block main %}
+        <main id="dashboard-content"></main>
+        {% endblock main %}
+    </div>
+</div>
+{% endblock body %}
