@@ -1,6 +1,7 @@
+use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::Json;
-use axum::{extract::State, response::IntoResponse};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -22,7 +23,6 @@ impl IntoResponse for SessionDeleteError {
     fn into_response(self) -> axum::response::Response {
         match self {
             SessionDeleteError::Sqlx(err) => {
-                tracing::error!(?err, "sqlx error");
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
             }
         }

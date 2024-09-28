@@ -1,8 +1,9 @@
 use super::InternalApiState;
 
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::{extract::State, Json};
+use axum::Json;
 
 use serde::Deserialize;
 use uuid::Uuid;
@@ -26,10 +27,7 @@ impl IntoResponse for UserDeleteError {
             UserDeleteError::UserNotFound => {
                 (StatusCode::NOT_FOUND, "user not found").into_response()
             }
-            UserDeleteError::Sqlx(err) => {
-                tracing::error!(?err, "sqlx error");
-                StatusCode::INTERNAL_SERVER_ERROR.into_response()
-            }
+            UserDeleteError::Sqlx(err) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }
 }
