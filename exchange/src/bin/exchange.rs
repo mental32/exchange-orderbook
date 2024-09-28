@@ -1,5 +1,5 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    dotenv::dotenv().ok();
+    dotenv::dotenv().unwrap();
 
     let body = async {
         tracing_subscriber::fmt::fmt()
@@ -9,7 +9,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
             .init();
 
-        let config = exchange::Config::load_from_env();
+        let config = exchange::Configuration::load_from_path(
+            exchange::config::config_file_path().unwrap().as_path(),
+        )?;
         exchange::start_fullstack(config, exchange::signal::from_host_os())
             .await
             .map_err(|err| Box::new(err) as Box<_>)
