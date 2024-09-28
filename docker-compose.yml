@@ -10,15 +10,18 @@ services:
       - "3000:3000"
     volumes:
       - ./etc/exchange/conf.toml:/etc/exchange/conf.toml
+      - ./frontend:/www/
     networks:
       - exchange-net
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - DATABASE_URL=postgres://exchange_user:exchange_password@postgres:5432/exchange
-      - RUST_LOG="info,exchange=trace,tower_http=debug"
+      - RUST_LOG=debug
       - CONFIG_FILE_PATH=/etc/exchange/conf.toml
       - BITCOIN_RPC_URL=http://bitcoind:8332
+      - JINJA_TEMPLATE_DIR=/www/templates/
+      - FE_WEB_DIR=/www/
     depends_on:
       - postgres
       - bitcoind
