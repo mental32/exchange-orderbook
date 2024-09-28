@@ -22,7 +22,7 @@ WORKDIR /app
 COPY --from=builder /app/target/release/exchange /usr/local/bin
 COPY --from=builder /app/target/release/bitcoind-grpc /usr/local/bin
 RUN apt-get update --yes && apt-get install --yes ca-certificates && apt-get clean --yes
-ENV RUST_LOG "info"
-ENV MACHINE_LOGGING "true"
+ENV RUST_LOG="info"
+ENV MACHINE_LOGGING="true"
 EXPOSE 3000
 CMD ["/usr/local/bin/exchange"]
