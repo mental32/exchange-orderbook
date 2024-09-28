@@ -39,15 +39,16 @@
                 <div class="card w-[448px] mt-4 ">
                     <div class="flex min-h-full flex-col justify-center px-6 py-6 lg:px-8">
                         <div class="sm:mx-auto sm:w-full sm:max-w-sm">
-                            <h1 class="mt-2 text-left text-2xl leading-9 tracking-tight text-base-content">
-                                Create your <strong class="btn p-0 h-auto text-2xl btn-ghost">personal</strong> account
-                            </h1>
+                            <h2 class="mt-2 text-left text-2xl font-bold leading-9 tracking-tight text-base-content">
+                                Sign
+                                in to your account</h2>
                         </div>
 
                         <div class="mt-10 sm:mx-auto sm:w-full sm:max-w-sm">
-                            <form class="space-y-6" action="#" method="POST">
+                            <form class="space-y-6" action="#" hx-post="/api/session">
                                 <div>
-                                    <label for="email" class="block text-sm font-medium leading-6 text-base-content">Email
+                                    <label for="email"
+                                        class="block text-sm font-medium leading-6 text-base-content">Email
                                         address</label>
                                     <div class="mt-2">
                                         <input id="email" name="email" type="email" autocomplete="email" required
@@ -59,6 +60,10 @@
                                     <div class="flex items-center justify-between">
                                         <label for="password"
                                             class="block text-sm font-medium leading-6 text-base-content">Password</label>
+                                        <div class="text-sm">
+                                            <a href="#" class="font-semibold text-accent hover:text-indigo-500">Forgot
+                                                password?</a>
+                                        </div>
                                     </div>
                                     <div class="mt-2">
                                         <input id="password" name="password" type="password"
@@ -66,13 +71,20 @@
                                             class="input input-bordered block w-full rounded-md border-0 py-1.5 text-base-content shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6">
                                     </div>
                                 </div>
-                                <div class="divider"></div>
+
                                 <div>
                                     <button type="submit"
-                                        class="btn btn-neutral flex w-full justify-center rounded-md px-3 py-1.5 text-sm font-semibold leading-6 shadow-sm">Create
-                                        account</button>
+                                        class="btn btn-neutral flex w-full justify-center rounded-md px-3 py-1.5 text-sm font-semibold leading-6 shadow-sm">Sign
+                                        in</button>
                                 </div>
                             </form>
+
+                            <p class="mt-10 text-center text-sm text-base-content">
+                                Not a member?
+                                <a hx-get="/sign-up.html" hx-swap="innerHTML" hx-target="#app" hx-select="#app"
+                                    class="font-semibold leading-6 text-accent hover:text-indigo-500 cursor-pointer">Sign
+                                    Up</a>
+                            </p>
                         </div>
                     </div>
 
