@@ -10,13 +10,8 @@ argon2 = { version = "0.5.2", features = ["alloc"] }
 async-trait = "0.1.74"
 atomic = "0.6.0"
 axum-extra = { version = "0.9.3", features = ["cookie", "typed-header"] }
-bitcoin = { version = "0.30.1", features = [
-    "rand",
-    "serde",
-    "base64",
-    "bitcoinconsensus",
-    "core2",
-] }
+axum-htmx = "0.6.0"
+bitcoincore-rpc-json = { git = "https://github.com/rust-bitcoin/rust-bitcoincore-rpc", package = "bitcoincore-rpc-json" }
 bytemuck = "1.14.0"
 chrono = "0.4.31"
 clap = { version = "4.5.9", features = ["derive", "env"] }
@@ -28,6 +23,9 @@ futures = "0.3.28"
 hex = "0.4"
 jsonrpc-async = "2.0.2"
 mime = "0.3.17"
+mime_guess = "2.0.5"
+minijinja = { version = "2.1.1", features = ["loader"] }
+minijinja-autoreload = "2.1.1"
 prost = "0.12.1"
 rand = "0.8.5"
 ratatui = { version = "0.24.0", features = ["all-widgets"] }
@@ -51,7 +49,17 @@ tower-http = { version = "0.5.2", features = ["full"] }
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 uuid = { version = "1.4.1", features = ["v4", "serde", "zerocopy", "fast-rng"] }
-bitcoincore-rpc-json = { git = "https://github.com/rust-bitcoin/rust-bitcoincore-rpc", package = "bitcoincore-rpc-json" }
+# zeromq = { version = "*", default-features = false, features = ["tokio-runtime", "all-transport"] }
+
+[dependencies.bitcoin]
+version = "0.30.1"
+features = [
+    "rand",
+    "serde",
+    "base64",
+    "bitcoinconsensus",
+    "core2",
+]
 
 [dependencies.sqlx]
 version = "0.7.2"
@@ -83,6 +91,7 @@ features = [
     "tower-log",
     "query",
     "json",
+    "form",
 ]
 
 [profile.release]
