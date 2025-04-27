@@ -1,0 +1,9 @@
+[package]
+name = "asset_feed"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+common-core = { path = "../common-core/" }
+serde = { workspace = true }
+tracing = { workspace = true }
