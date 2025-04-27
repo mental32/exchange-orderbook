@@ -51,6 +51,7 @@ services:
     restart: on-failure # Restart the service if it fails
     stop_signal: SIGINT # Stop the service gracefully
 
+
   nginx:
     image: nginx:latest
     ports:
@@ -60,11 +61,6 @@ services:
       - ./etc/nginx/nginx.conf:/etc/nginx/nginx.conf
       - ./etc/letsencrypt/:/etc/letsencrypt:ro
       - ./frontend/:/www:ro
-    networks:
-      - exchange-net
-    depends_on:
-      - exchange
-    restart: always
 
   postgres:
     image: postgres:latest

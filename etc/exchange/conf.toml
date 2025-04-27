@@ -1,5 +1,11 @@
+database_url = "postgres://exchange_user:exchange_password@127.0.0.1:5432/exchange"
+rust_log = "info,exchange=trace,tower_http=debug"
+
+infura_ws = "wss://goerli.infura.io/ws/v3/15420f8445614737ba63730cbc019cf2"
+bitcoin_rpc_url = "http://bitcoind:8332"
+
 eth_wallet_mnemonic = ""
 bitcoin_rpc_auth_user = "bobby"
 bitcoin_rpc_auth_password = "bobby"
 bitcoin_wallet_name = "org.exchange.wallet"
-bitcoin_grpc_endpoint = "http://bitcoind-grpc-proxy:50051"
+bitcoin_grpc_endpoint = "http://localhost:50051"
