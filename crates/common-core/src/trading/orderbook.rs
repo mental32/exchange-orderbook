@@ -2,7 +2,7 @@
 
 use std::num::NonZeroU32;
 
-use tinyvec::{tiny_vec, TinyVec};
+use tinyvec::{TinyVec, tiny_vec};
 
 use serde::{Deserialize, Serialize};
 

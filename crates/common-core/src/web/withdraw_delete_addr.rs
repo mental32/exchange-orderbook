@@ -1,17 +1,14 @@
-use std::any::Any;
-
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::response::{Html, IntoResponse, Response};
-use axum::{Extension, Form, Json};
+use axum::response::{IntoResponse, Response};
+use axum::{Extension, Form};
 use axum_htmx::HX_TRIGGER;
 use serde::Deserialize;
 
-use crate::bitcoin::proto::GetNewAddressRequest;
-use crate::Asset;
+use crate::trading::asset::Asset;
 
-use super::middleware::auth::UserUuid;
 use super::InternalApiState;
+use super::middleware::auth::UserUuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeleteWithdrawalAddressError {
@@ -46,7 +43,7 @@ pub struct DeletewithdrawalAddressParams {
 }
 
 pub async fn f(
-    State(mut state): State<InternalApiState>,
+    State(state): State<InternalApiState>,
     Extension(UserUuid(user_id)): Extension<UserUuid>,
     Form(params): Form<DeletewithdrawalAddressParams>,
 ) -> Result<Response, DeleteWithdrawalAddressError> {

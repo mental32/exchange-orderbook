@@ -7,20 +7,16 @@ use std::sync::Arc;
 use std::{error, fmt, io};
 
 use ahash::HashMap;
-use async_trait::async_trait;
 use bitcoincore_rpc_json::bitcoin::address::NetworkUnchecked;
-use bitcoincore_rpc_json::bitcoin::consensus::encode;
 use bitcoincore_rpc_json::bitcoin::hashes::hex::FromHex;
-use bitcoincore_rpc_json::bitcoin::hashes::{hex, sha256};
 use bitcoincore_rpc_json::bitcoin::hex::HexToBytesError;
 use bitcoincore_rpc_json::bitcoin::secp256k1::ecdsa::Signature;
 use bitcoincore_rpc_json::bitcoin::sighash::EcdsaSighashType;
 use bitcoincore_rpc_json::bitcoin::{
-    secp256k1, Amount, OutPoint, PrivateKey, PublicKey, Script, ScriptBuf, SignedAmount,
-    Transaction,
+    Amount, OutPoint, PrivateKey, PublicKey, Script, Transaction, secp256k1,
 };
 pub use bitcoincore_rpc_json::{
-    bitcoin, AddMultiSigAddressResult, AddressType, Bip9SoftforkInfo, Bip9SoftforkStatistics,
+    AddMultiSigAddressResult, AddressType, Bip9SoftforkInfo, Bip9SoftforkStatistics,
     Bip9SoftforkStatus, BlockRef, CreateRawTransactionInput, EstimateMode, EstimateSmartFeeResult,
     FinalizePsbtResult, FundRawTransactionOptions, FundRawTransactionResult, GetAddressInfoResult,
     GetBalancesResult, GetBlockFilterResult, GetBlockHeaderResult, GetBlockResult,
@@ -31,11 +27,10 @@ pub use bitcoincore_rpc_json::{
     ListSinceBlockResult, ListTransactionResult, ListUnspentQueryOptions, ListUnspentResultEntry,
     LoadWalletResult, PubKeyOrAddress, ScanTxOutRequest, ScanTxOutResult, SignRawTransactionInput,
     SignRawTransactionResult, Softfork, SoftforkType, TestMempoolAcceptResult,
-    WalletCreateFundedPsbtOptions, WalletCreateFundedPsbtResult,
+    WalletCreateFundedPsbtOptions, WalletCreateFundedPsbtResult, bitcoin,
 };
 use jsonrpc_async;
 use rustc_hex::ToHex;
-use serde::de::Error as SerdeError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Serialize, Deserialize)]

@@ -1,6 +1,6 @@
 use common_core::cx::Cx;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
     dotenv::dotenv().unwrap();
 
     tracing_subscriber::fmt::fmt()
@@ -22,8 +22,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("Failed building the Runtime")
         .block_on(async move {
             let cx = Cx::new(config).await?;
-            common_core::fullstack::serve(cx) // config, common_core::signal::from_host_os())
-                .await
-                .map_err(|err| Box::new(err) as Box<_>)
+            Ok(
+                common_core::fullstack::serve(cx) // config, common_core::signal::from_host_os())
+                    .await?,
+            )
         });
 }

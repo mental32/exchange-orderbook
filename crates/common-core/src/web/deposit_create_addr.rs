@@ -1,14 +1,14 @@
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
-use axum::{Extension, Form, Json};
+use axum::{Extension, Form};
 use serde::Deserialize;
 
 use crate::bitcoin::proto::GetNewAddressRequest;
-use crate::Asset;
+use crate::trading::asset::Asset;
 
-use super::middleware::auth::UserUuid;
 use super::InternalApiState;
+use super::middleware::auth::UserUuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CreateDepositAddressError {
@@ -53,7 +53,7 @@ pub async fn f(
     //     account
     // } else {
     //     state.create_user_account(user_id, asset).await?;
-    // } 
+    // }
 
     let asset = match params.asset.as_str() {
         "btc" | "BTC" => Asset::Bitcoin,

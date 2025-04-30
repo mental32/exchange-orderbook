@@ -1,7 +1,7 @@
 use tonic::transport::Endpoint;
 
-use super::proto::bitcoin_core_rpc_client::BitcoinCoreRpcClient;
 use super::proto::GetNewAddressRequest;
+use super::proto::bitcoin_core_rpc_client::BitcoinCoreRpcClient;
 
 // async fn bitcoind_rpc_client(
 //     config: &Config,

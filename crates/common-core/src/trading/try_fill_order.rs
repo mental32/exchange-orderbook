@@ -4,6 +4,8 @@ use std::convert::Infallible;
 
 use pending_fill::MakerFill;
 
+use super::orderbook::{Order, OrderSide, OrderType, Orderbook};
+use super::pending_fill::{FillType, PendingFill};
 use super::*;
 
 /// An error that can occur when attempting to fill orders.
@@ -81,6 +83,9 @@ pub fn try_fill_orders<'a>(
 
 #[cfg(test)]
 mod tests {
+    use crate::trading::orderbook::{Order, OrderSide, OrderType, Orderbook};
+    use crate::trading::pending_fill::FillType;
+
     use super::*;
 
     macro_rules! nz {

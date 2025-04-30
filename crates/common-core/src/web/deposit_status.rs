@@ -1,10 +1,9 @@
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
 use axum::Extension;
+use axum::extract::{Path, State};
+use axum::response::Response;
 
-use super::middleware::auth::UserUuid;
 use super::InternalApiState;
+use super::middleware::auth::UserUuid;
 
 pub async fn f(
     State(state): State<InternalApiState>,

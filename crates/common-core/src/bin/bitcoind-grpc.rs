@@ -10,8 +10,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_line_number(true)
             .init();
 
-        let config = common_core::Configuration::load_from_path(
-            common_core::config::config_file_path().unwrap().as_path(),
+        let config = common_core::configuration::Configuration::load_from_path(
+            common_core::configuration::config_file_path()
+                .unwrap()
+                .as_path(),
         )?;
         common_core::bitcoin::start_grpc_proxy(config, common_core::signal::from_host_os())
             .await

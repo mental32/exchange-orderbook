@@ -1,10 +1,11 @@
-use argon2::password_hash::PasswordHashString;
-use argon2::{PasswordHash, PasswordHasher};
+#[cfg(feature = "argon2")]
+use {argon2::PasswordHasher, argon2::password_hash::PasswordHashString};
+
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer};
 
-#[derive(Deserialize, Clone)]
-pub struct Password(pub(crate) String);
+#[derive(Deserialize, Default, Clone)]
+pub struct Password(pub String);
 
 impl std::fmt::Debug for Password {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -44,6 +45,7 @@ where
 }
 
 impl Password {
+    #[cfg(feature = "argon2")]
     pub fn argon2_hash_password(&self) -> Result<PasswordHashString, argon2::password_hash::Error> {
         let argon2 = argon2::Argon2::default();
         let salt = argon2::password_hash::SaltString::generate(&mut rand::rngs::OsRng);

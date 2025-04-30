@@ -1,16 +1,10 @@
-use std::str::FromStr;
-
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::middleware::Next;
-use axum_extra::headers::authorization::Bearer;
-use axum_extra::headers::{Authorization, HeaderMapExt};
 
 use axum::response::{IntoResponse, Redirect};
 use axum_extra::extract::CookieJar;
-use chrono::{Datelike, TimeZone, Timelike};
-use sqlx::types::time::{Date, PrimitiveDateTime, Time};
 
 use crate::web::InternalApiState;
 

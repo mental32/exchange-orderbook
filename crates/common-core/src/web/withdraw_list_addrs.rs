@@ -3,8 +3,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse as _, Response};
 use axum::{Extension, Json};
 
-use super::middleware::auth::UserUuid;
 use super::InternalApiState;
+use super::middleware::auth::UserUuid;
 
 pub async fn f(
     State(state): State<InternalApiState>,

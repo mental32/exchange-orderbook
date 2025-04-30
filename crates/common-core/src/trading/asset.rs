@@ -1,4 +1,7 @@
-//! Asset types
+use super::{
+    order_uuid::OrderUuid,
+    orderbook::{OrderIndex, Orderbook},
+};
 
 use std::str::FromStr;
 
@@ -84,4 +87,44 @@ pub(crate) fn internal_asset_list() -> &'static [(AssetKey, Asset)] {
         (K::Static("ETH"), A::Ether),
     ]
     .as_slice()
+}
+
+/// the "state" of an asset book for a trading engine.
+pub struct AssetBook {
+    asset: Asset,
+    orderbook: Orderbook,
+}
+
+impl AssetBook {
+    /// create a new asset book
+    pub fn new(asset: Asset) -> Self {
+        Self {
+            asset,
+            orderbook: Orderbook::new(),
+        }
+    }
+
+    /// get the asset
+    pub fn orderbook_mut(&mut self) -> &mut Orderbook {
+        &mut self.orderbook
+    }
+}
+
+/// multiple asset books for a trading engine.
+pub struct Assets {
+    /// map of order uuids to order indexes and assets.
+    pub order_uuids: ahash::AHashMap<OrderUuid, (OrderIndex, Asset)>,
+    /// the asset book for ether
+    pub eth: AssetBook,
+    /// the asset book for bitcoin
+    pub btc: AssetBook,
+}
+
+impl Assets {
+    pub fn match_asset_mut(&mut self, asset: Asset) -> &mut AssetBook {
+        match asset {
+            Asset::Ether => &mut self.eth,
+            Asset::Bitcoin => &mut self.btc,
+        }
+    }
 }

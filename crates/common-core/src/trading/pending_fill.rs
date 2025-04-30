@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 
 use thiserror::Error;
 
-use super::*;
+use super::orderbook::{Order, OrderIndex, OrderSide, OrderType, Orderbook};
 
 /// An error that can occur when executing a pending fill operation.
 #[derive(Debug, Error)]

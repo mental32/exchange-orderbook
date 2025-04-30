@@ -3,8 +3,8 @@
 use std::convert::Infallible;
 use std::time::Duration;
 
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 
 mod client;
 pub use client::BitcoinRpcClient;
@@ -12,8 +12,8 @@ pub use client::BitcoinRpcClient;
 pub mod rpc;
 use rpc::AddressType;
 
+use crate::configuration::Configuration;
 use crate::signal::Signals;
-use crate::Configuration;
 
 pub mod proto {
     //! Generated code for the protobuf definitions.
@@ -58,7 +58,7 @@ impl proto::bitcoin_core_rpc_server::BitcoinCoreRpc for BitcoinCoreRpcImpl {
                         "Invalid address type. Valid values are: legacy, p2sh-segwit, bech32",
                     ))
                 }
-                .boxed()
+                .boxed();
             }
             None => None,
         };

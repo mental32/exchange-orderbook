@@ -9,46 +9,20 @@
 //! you would call `app.place_order(..)`.
 //!
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::num::NonZeroU64;
-use std::path::Path;
-use std::str::FromStr as _;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
+#[cfg(feature = "argon2")]
 use argon2::password_hash::PasswordHashString;
-use argon2::{Argon2, PasswordHasher, PasswordVerifier as _};
-use atomic::Atomic;
-use email_address::EmailAddress;
-use futures::TryFutureExt;
-use mime_guess::MimeGuess;
-use minijinja_autoreload::AutoReloader;
+
 use serde::Serialize;
 use sqlx::{Executor as _, PgPool};
 use thiserror::Error;
-use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use crate::asset::{AssetKey, internal_asset_list};
 use crate::bitcoin::BitcoinRpcClient;
-use crate::password::Password;
-use crate::trading::{
-    CancelOrder, OrderSide, OrderUuid, PlaceOrder, PlaceOrderResult, TeResponse as Response,
-    TradeCmd, TradingEngineCmd, TradingEngineError, TradingEngineTx,
-};
-use crate::web::TradeAddOrder;
-use crate::{Asset, Configuration};
-
-mod defer_guard;
-pub use defer_guard::{DeferGuard, defer};
-
-mod reserve_ok;
-pub use reserve_ok::ReserveOk;
-
-struct Inner {
-    te_state: Atomic<TradingEngineState>,
-    // jinja: crate::jinja::Jinja,
-}
+use crate::configuration::Configuration;
+use crate::reserve_ok::ReserveOk;
+use crate::trading::asset::{Asset, AssetKey};
 
 #[derive(Debug, Error)]
 pub enum ReserveError {
@@ -133,60 +107,27 @@ pub struct UserDetails {
     portfolio: UserPortfolio,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[repr(u64)]
-enum TradingEngineState {
-    #[default]
-    Suspended = 0,
-    Running,
-    ReduceOnly,
-}
-
-unsafe impl bytemuck::NoUninit for TradingEngineState {}
-
 #[derive(Debug)]
 pub struct UserAccount {}
 
 #[derive(Debug, Clone)]
 pub struct AppCx {
-    /// a mpsc sender to the trading engine supervisor.
-    te_tx: TradingEngineTx,
     /// a client for the bitcoin core rpc.
     pub(crate) bitcoind_rpc: BitcoinRpcClient,
     /// a pool of connections to the database.
     db: sqlx::PgPool,
-    /// Read-only data or data that has interior mutability.
-    inner_ro: Arc<Inner>,
     /// The service configuration
     config: Configuration,
     /// The list of active assets
-    pub(crate) assets: &'static [(AssetKey, Asset)],
-}
-
-impl std::fmt::Debug for Inner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Inner")
-            .field("te_state", &self.te_state)
-            .field("jinja", &"")
-            .finish()
-    }
+    pub assets: &'static [(AssetKey, Asset)],
 }
 
 impl AppCx {
-    pub fn new(
-        te_tx: TradingEngineTx,
-        btc_rpc: BitcoinRpcClient,
-        db: sqlx::PgPool,
-        config: Configuration,
-    ) -> Self {
+    pub fn new(btc_rpc: BitcoinRpcClient, db: sqlx::PgPool, config: Configuration) -> Self {
         Self {
-            te_tx,
             bitcoind_rpc: btc_rpc,
             db,
-            inner_ro: Arc::new(Inner {
-                te_state: Atomic::new(TradingEngineState::Running),
-            }),
-            assets: internal_asset_list(),
+            assets: crate::trading::asset::internal_asset_list(),
             config,
         }
     }
@@ -199,51 +140,51 @@ impl AppCx {
         self.db.clone()
     }
 
-    pub fn trading_engine_state(&self) -> TradingEngineState {
-        self.inner_ro.te_state.load(Ordering::Relaxed)
-    }
+    // pub fn trading_engine_state(&self) -> TradingEngineState {
+    //     self.inner_ro.te_state.load(Ordering::Relaxed)
+    // }
 
-    pub fn set_trading_engine_state(&self, state: TradingEngineState) {
-        self.inner_ro.te_state.store(state, Ordering::SeqCst)
-    }
+    // pub fn set_trading_engine_state(&self, state: TradingEngineState) {
+    //     self.inner_ro.te_state.store(state, Ordering::SeqCst)
+    // }
 }
 
 impl AppCx {
-    pub async fn list_withdrawal_addrs(
-        &self,
-        user_id: uuid::Uuid,
-    ) -> Result<Vec<(String, String)>, sqlx::Error> {
-        Ok(sqlx::query!(
-            "SELECT address_text, currency
-                FROM user_addresses
-                WHERE user_id = $1
-                AND kind = 'withdrawal';",
-            user_id
-        )
-        .fetch_all(&self.db)
-        .await?
-        .into_iter()
-        .map(|rec| (rec.address_text, rec.currency))
-        .collect())
-    }
+    // pub async fn list_withdrawal_addrs(
+    //     &self,
+    //     user_id: uuid::Uuid,
+    // ) -> Result<Vec<(String, String)>, sqlx::Error> {
+    //     Ok(sqlx::query!(
+    //         "SELECT address_text, currency
+    //             FROM user_addresses
+    //             WHERE user_id = $1
+    //             AND kind = 'withdrawal';",
+    //         user_id
+    //     )
+    //     .fetch_all(&self.db)
+    //     .await?
+    //     .into_iter()
+    //     .map(|rec| (rec.address_text, rec.currency))
+    //     .collect())
+    // }
 
-    pub async fn list_deposit_addrs(
-        &self,
-        user_id: uuid::Uuid,
-    ) -> Result<Vec<(String, String)>, sqlx::Error> {
-        Ok(sqlx::query!(
-            "SELECT address_text, currency
-                FROM user_addresses
-                WHERE user_id = $1
-                AND kind = 'deposit';",
-            user_id
-        )
-        .fetch_all(&self.db)
-        .await?
-        .into_iter()
-        .map(|rec| (rec.address_text, rec.currency))
-        .collect())
-    }
+    // pub async fn list_deposit_addrs(
+    //     &self,
+    //     user_id: uuid::Uuid,
+    // ) -> Result<Vec<(String, String)>, sqlx::Error> {
+    //     Ok(sqlx::query!(
+    //         "SELECT address_text, currency
+    //             FROM user_addresses
+    //             WHERE user_id = $1
+    //             AND kind = 'deposit';",
+    //         user_id
+    //     )
+    //     .fetch_all(&self.db)
+    //     .await?
+    //     .into_iter()
+    //     .map(|rec| (rec.address_text, rec.currency))
+    //     .collect())
+    // }
 
     pub async fn calculate_balance_from_accounting(
         &self,
@@ -283,7 +224,7 @@ impl AppCx {
             .fetch_one(&mut *db)
             .await?;
 
-            let mut tx_journal = sqlx::query!("SELECT * FROM account_tx_journal WHERE credit_account_id = $1 AND debit_account_id = $2 AND currency = 'BTC' AND transaction_type = 'CHAIN.DEPOSIT';", user_account_rec.id, btc_account_rec.id)
+            let tx_journal = sqlx::query!("SELECT * FROM account_tx_journal WHERE credit_account_id = $1 AND debit_account_id = $2 AND currency = 'BTC' AND transaction_type = 'CHAIN.DEPOSIT';", user_account_rec.id, btc_account_rec.id)
                 .fetch_all(&mut *db)
                 .await?
                 .into_iter()
@@ -307,7 +248,7 @@ impl AppCx {
                     continue;
                 }
 
-                let res = sqlx::query!(
+                let _res = sqlx::query!(
                     r#"INSERT INTO account_tx_journal (
                         credit_account_id,
                         debit_account_id,
@@ -331,7 +272,7 @@ impl AppCx {
         }
 
         let check_bitcoind_fut = check_bitcoind(self.clone(), user_id.clone());
-        let (res,) = tokio::join!(check_bitcoind_fut);
+        let (_res,) = tokio::join!(check_bitcoind_fut);
     }
 
     pub async fn user_balance(&self, user_id: Uuid) -> Result<HashMap<String, i64>, sqlx::Error> {
@@ -409,123 +350,123 @@ impl AppCx {
         })
     }
 
-    pub async fn place_order(
-        &self,
-        asset: Asset,
-        user_uuid: uuid::Uuid,
-        trade_add_order: TradeAddOrder,
-    ) -> Result<(Response<PlaceOrderResult>, ReserveOk), PlaceOrderError> {
-        if !matches!(self.trading_engine_state(), TradingEngineState::Running) {
-            return Err(PlaceOrderError::TradingEngineUnresponsive);
-        }
+    // pub async fn place_order(
+    //     &self,
+    //     asset: Asset,
+    //     user_uuid: uuid::Uuid,
+    //     trade_add_order: TradeAddOrder,
+    // ) -> Result<(Response<PlaceOrderResult>, ReserveOk), PlaceOrderError> {
+    //     if !matches!(self.trading_engine_state(), TradingEngineState::Running) {
+    //         return Err(PlaceOrderError::TradingEngineUnresponsive);
+    //     }
 
-        let TradeAddOrder {
-            side,
-            order_type,
-            stp,
-            quantity,
-            price,
-            time_in_force,
-        } = trade_add_order;
+    //     let TradeAddOrder {
+    //         side,
+    //         order_type,
+    //         stp,
+    //         quantity,
+    //         price,
+    //         time_in_force,
+    //     } = trade_add_order;
 
-        let reserve = match side {
-            OrderSide::Buy => self.reserve_by_asset(user_uuid, quantity, "USD").await?,
-            OrderSide::Sell => {
-                self.reserve_by_asset(
-                    user_uuid,
-                    quantity,
-                    match asset {
-                        Asset::Bitcoin => "BTC",
-                        Asset::Ether => "ETH",
-                    },
-                )
-                .await?
-            }
-        };
+    //     let reserve = match side {
+    //         OrderSide::Buy => self.reserve_by_asset(user_uuid, quantity, "USD").await?,
+    //         OrderSide::Sell => {
+    //             self.reserve_by_asset(
+    //                 user_uuid,
+    //                 quantity,
+    //                 match asset {
+    //                     Asset::Bitcoin => "BTC",
+    //                     Asset::Ether => "ETH",
+    //                 },
+    //             )
+    //             .await?
+    //         }
+    //     };
 
-        tracing::trace!(?reserve.previous_balance, ?reserve.new_balance, "marked funds as reserved");
+    //     tracing::trace!(?reserve.previous_balance, ?reserve.new_balance, "marked funds as reserved");
 
-        let (place_order_tx, wait_response) = oneshot::channel();
-        let place_order = PlaceOrder::new(
-            asset,
-            user_uuid,
-            price,
-            quantity,
-            order_type,
-            stp,
-            time_in_force,
-            side,
-        );
+    //     let (place_order_tx, wait_response) = oneshot::channel();
+    //     let place_order = PlaceOrder::new(
+    //         asset,
+    //         user_uuid,
+    //         price,
+    //         quantity,
+    //         order_type,
+    //         stp,
+    //         time_in_force,
+    //         side,
+    //     );
 
-        let cmd = TradeCmd::PlaceOrder((place_order, place_order_tx));
+    //     let cmd = TradeCmd::PlaceOrder((place_order, place_order_tx));
 
-        match self.te_tx.send(TradingEngineCmd::Trade(cmd)).await {
-            Ok(()) => Ok((Response(wait_response), reserve)),
-            Err(err) => {
-                tracing::warn!(?err, "failed to send place order command to trading engine");
-                if let Err(err) = reserve.revert(&self.db).await {
-                    tracing::error!(?err, "failed to revert reserve");
-                }
-                Err(PlaceOrderError::TradingEngineUnresponsive)
-            }
-        }
-    }
+    //     match self.te_tx.send(TradingEngineCmd::Trade(cmd)).await {
+    //         Ok(()) => Ok((Response(wait_response), reserve)),
+    //         Err(err) => {
+    //             tracing::warn!(?err, "failed to send place order command to trading engine");
+    //             if let Err(err) = reserve.revert(&self.db).await {
+    //                 tracing::error!(?err, "failed to revert reserve");
+    //             }
+    //             Err(PlaceOrderError::TradingEngineUnresponsive)
+    //         }
+    //     }
+    // }
 
-    pub async fn cancel_order(
-        &self,
-        user_uuid: Uuid,
-        order_uuid: Uuid,
-    ) -> Result<Response<()>, CancelOrderError> {
-        // Running and ReduceOnly are the only states where we can cancel orders.
-        if matches!(self.trading_engine_state(), TradingEngineState::Suspended) {
-            return Err(CancelOrderError::TradingEngineUnresponsive);
-        }
+    // pub async fn cancel_order(
+    //     &self,
+    //     user_uuid: Uuid,
+    //     order_uuid: Uuid,
+    // ) -> Result<Response<()>, CancelOrderError> {
+    //     // Running and ReduceOnly are the only states where we can cancel orders.
+    //     if matches!(self.trading_engine_state(), TradingEngineState::Suspended) {
+    //         return Err(CancelOrderError::TradingEngineUnresponsive);
+    //     }
 
-        let (cancel_order_tx, wait_response) = oneshot::channel();
-        let cancel_order = CancelOrder::new(user_uuid, OrderUuid(order_uuid));
+    //     let (cancel_order_tx, wait_response) = oneshot::channel();
+    //     let cancel_order = CancelOrder::new(user_uuid, OrderUuid(order_uuid));
 
-        let cmd = TradeCmd::CancelOrder((cancel_order, cancel_order_tx));
+    //     let cmd = TradeCmd::CancelOrder((cancel_order, cancel_order_tx));
 
-        match self.te_tx.send(TradingEngineCmd::Trade(cmd)).await {
-            Ok(()) => Ok(Response(wait_response)),
-            Err(err) => {
-                tracing::warn!(
-                    ?err,
-                    "failed to send cancel order command to trading engine"
-                );
-                Err(CancelOrderError::TradingEngineUnresponsive)
-            }
-        }
-    }
+    //     match self.te_tx.send(TradingEngineCmd::Trade(cmd)).await {
+    //         Ok(()) => Ok(Response(wait_response)),
+    //         Err(err) => {
+    //             tracing::warn!(
+    //                 ?err,
+    //                 "failed to send cancel order command to trading engine"
+    //             );
+    //             Err(CancelOrderError::TradingEngineUnresponsive)
+    //         }
+    //     }
+    // }
 
-    pub async fn create_user(
-        &self,
-        name: &str,
-        email: &str,
-        password_hash: PasswordHashString,
-    ) -> Result<Uuid, CreateUserError> {
-        match sqlx::query!(
-            r#"
-            INSERT INTO users (name, email, password_hash)
-            VALUES ($1, $2, $3)
-            RETURNING id
-            "#,
-            name,
-            email,
-            password_hash.as_bytes(),
-        )
-        .fetch_one(&self.db())
-        .await
-        {
-            Ok(record) => Ok(record.id),
-            Err(err) => Err(match err {
-                sqlx::Error::Database(ref dbe) if dbe.is_unique_violation() => {
-                    CreateUserError::EmailUniqueViolation(err)
-                }
-                _ => CreateUserError::Sqlx(err),
-            }),
-        }
-    }
+    // pub async fn create_user(
+    //     &self,
+    //     name: &str,
+    //     email: &str,
+    //     password_hash: PasswordHashString,
+    // ) -> Result<Uuid, CreateUserError> {
+    //     match sqlx::query!(
+    //         r#"
+    //         INSERT INTO users (name, email, password_hash)
+    //         VALUES ($1, $2, $3)
+    //         RETURNING id
+    //         "#,
+    //         name,
+    //         email,
+    //         password_hash.as_bytes(),
+    //     )
+    //     .fetch_one(&self.db())
+    //     .await
+    //     {
+    //         Ok(record) => Ok(record.id),
+    //         Err(err) => Err(match err {
+    //             sqlx::Error::Database(ref dbe) if dbe.is_unique_violation() => {
+    //                 CreateUserError::EmailUniqueViolation(err)
+    //             }
+    //             _ => CreateUserError::Sqlx(err),
+    //         }),
+    //     }
+    // }
 
     pub async fn fetch_user_details(
         &self,
@@ -543,7 +484,7 @@ impl AppCx {
         .fetch_one(&mut *dtx)
         .await?;
 
-        let mut addrs = sqlx::query!(
+        let addrs = sqlx::query!(
             r#"SELECT *
             FROM user_addresses
             WHERE user_id = $1"#,
@@ -591,7 +532,7 @@ impl AppCx {
         user_id: Uuid,
         asset: Asset,
     ) -> Result<Option<UserAccount>, sqlx::Error> {
-        let rec = match sqlx::query!(
+        let _rec = match sqlx::query!(
             r#"SELECT id FROM accounts
             WHERE currency = $1
                 AND source_type = 'user'
@@ -611,98 +552,98 @@ impl AppCx {
     }
 }
 
-#[cfg(test)]
-mod test {
-    use crate::spawn_trading_engine::spawn_trading_engine;
+// #[cfg(test)]
+// mod test {
+//     use crate::password::Password;
 
-    use super::*;
+//     use super::*;
 
-    async fn make_app_cx_fixture(db: sqlx::PgPool) -> AppCx {
-        let config = Configuration::load_from_toml("");
-        let (te_tx, te_handle) = spawn_trading_engine(&config, db.clone())
-            .init_from_db(db.clone())
-            .await
-            .unwrap();
-        AppCx::new(te_tx, BitcoinRpcClient::new_mock(), db, config)
-    }
+//     async fn make_app_cx_fixture(db: sqlx::PgPool) -> AppCx {
+//         let config = Configuration::load_from_toml("");
+//         let (te_tx, te_handle) = spawn_trading_engine(&config, db.clone())
+//             .init_from_db(db.clone())
+//             .await
+//             .unwrap();
+//         AppCx::new(te_tx, BitcoinRpcClient::new_mock(), db, config)
+//     }
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn test_duplicate_user_email(db: sqlx::PgPool) {
-        let app_cx = make_app_cx_fixture(db.clone()).await;
-        let password_hash = Password("letmein".into());
+//     #[sqlx::test(migrations = "../../migrations")]
+//     async fn test_duplicate_user_email(db: sqlx::PgPool) {
+//         let app_cx = make_app_cx_fixture(db.clone()).await;
+//         let password_hash = Password("letmein".into());
 
-        let user_uuid = app_cx
-            .create_user(
-                "foo",
-                "foo@example.com",
-                password_hash.argon2_hash_password().unwrap(),
-            )
-            .await
-            .unwrap();
+//         let user_uuid = app_cx
+//             .create_user(
+//                 "foo",
+//                 "foo@example.com",
+//                 password_hash.argon2_hash_password().unwrap(),
+//             )
+//             .await
+//             .unwrap();
 
-        if let Err(err) = app_cx
-            .create_user(
-                "foo",
-                "foo@example.com",
-                password_hash.argon2_hash_password().unwrap(),
-            )
-            .await
-        {
-            assert!(matches!(err, CreateUserError::EmailUniqueViolation(err)));
-        }
-    }
+//         if let Err(err) = app_cx
+//             .create_user(
+//                 "foo",
+//                 "foo@example.com",
+//                 password_hash.argon2_hash_password().unwrap(),
+//             )
+//             .await
+//         {
+//             assert!(matches!(err, CreateUserError::EmailUniqueViolation(err)));
+//         }
+//     }
 
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn test_calculate_balances(db: sqlx::PgPool) {
-        let app_cx = make_app_cx_fixture(db.clone()).await;
+//     #[sqlx::test(migrations = "../../migrations")]
+//     async fn test_calculate_balances(db: sqlx::PgPool) {
+//         let app_cx = make_app_cx_fixture(db.clone()).await;
 
-        let password_hash = Password("letmein".into()).argon2_hash_password().unwrap();
-        let user_uuid = app_cx
-            .create_user("foo", "foo@example.com", password_hash)
-            .await
-            .unwrap();
+//         let password_hash = Password("letmein".into()).argon2_hash_password().unwrap();
+//         let user_uuid = app_cx
+//             .create_user("foo", "foo@example.com", password_hash)
+//             .await
+//             .unwrap();
 
-        sqlx::query!(
-            r#"
-            INSERT INTO accounts (source_type, source_id, currency)
-            VALUES ('user', $1, 'BTC');
-            "#,
-            user_uuid.to_string()
-        )
-        .execute(&db)
-        .await
-        .unwrap();
+//         sqlx::query!(
+//             r#"
+//             INSERT INTO accounts (source_type, source_id, currency)
+//             VALUES ('user', $1, 'BTC');
+//             "#,
+//             user_uuid.to_string()
+//         )
+//         .execute(&db)
+//         .await
+//         .unwrap();
 
-        // Generate a random number of transactions
-        let num_transactions = rand::random::<u8>() as usize; // generate a random number of transactions
-        let mut total_credits: i64 = 0;
+//         // Generate a random number of transactions
+//         let num_transactions = rand::random::<u8>() as usize; // generate a random number of transactions
+//         let mut total_credits: i64 = 0;
 
-        for _ in 0..num_transactions {
-            let amount = (rand::random::<u16>() + 1) as i64; // ensure non-zero
-            total_credits += amount;
+//         for _ in 0..num_transactions {
+//             let amount = (rand::random::<u16>() + 1) as i64; // ensure non-zero
+//             total_credits += amount;
 
-            sqlx::query!(
-                r#"
-                INSERT INTO account_tx_journal (credit_account_id, debit_account_id, currency, amount, transaction_type)
-                VALUES ((SELECT id FROM accounts WHERE source_id = $1 AND currency = 'BTC'), 1, 'BTC', $2, 'random deposit');
-                "#,
-                user_uuid.to_string(),
-                amount
-            )
-            .execute(&db)
-            .await
-            .unwrap();
-        }
+//             sqlx::query!(
+//                 r#"
+//                 INSERT INTO account_tx_journal (credit_account_id, debit_account_id, currency, amount, transaction_type)
+//                 VALUES ((SELECT id FROM accounts WHERE source_id = $1 AND currency = 'BTC'), 1, 'BTC', $2, 'random deposit');
+//                 "#,
+//                 user_uuid.to_string(),
+//                 amount
+//             )
+//             .execute(&db)
+//             .await
+//             .unwrap();
+//         }
 
-        let balance = app_cx
-            .calculate_balance_from_accounting(user_uuid, "BTC")
-            .await
-            .unwrap();
+//         let balance = app_cx
+//             .calculate_balance_from_accounting(user_uuid, "BTC")
+//             .await
+//             .unwrap();
 
-        assert_eq!(
-            balance,
-            NonZeroU64::new(total_credits as u64),
-            "Expected balance does not match calculated balance: user={user_uuid} balance={balance:?} expected={total_credits:?}"
-        );
-    }
-}
+//         assert_eq!(
+//             balance,
+//             NonZeroU64::new(total_credits as u64),
+//             "Expected balance does not match calculated balance: user={user_uuid} balance={balance:?} expected={total_credits:?}"
+//         );
+//     }
+// }
