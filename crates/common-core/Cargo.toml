@@ -4,10 +4,14 @@ version = "100.0.0"
 edition = "2024"
 build = "./build.rs"
 
+[features]
+default = []
+argon2 = ["dep:argon2"]
+
 [dependencies]
 ahash = { workspace = true }
 anyhow = { workspace = true }
-argon2 = { workspace = true }
+argon2 = { workspace = true, optional = true }
 async-trait = { workspace = true }
 atomic = { workspace = true }
 axum = { workspace = true }
