@@ -1,5 +1,4 @@
 import SiteFooter from "@/components/site-footer";
-import { ThemeProvider } from "@/components/theme-provider";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { SignedIn, SignedOut, SignInButton, SignUpButton } from "@clerk/nextjs";
