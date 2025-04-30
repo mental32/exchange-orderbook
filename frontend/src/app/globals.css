@@ -124,3 +124,11 @@
     @apply bg-background text-foreground;
   }
 }
+
+.sidebar-menu-item {
+  @apply pl-3 pr-3 pt-2 pb-2 ml-4 gap-0;
+}
+
+.sidebar-menu-button {
+  @apply [&>svg]:size-7 p-0 hover:bg-background hover:text-foreground text-muted-foreground focus-visible:ring-0 focus-visible:outline-none active:bg-background;
+}

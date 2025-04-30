@@ -8,9 +8,7 @@ import {
     SidebarMenuButton,
     SidebarMenuItem,
 } from "@/components/ui/sidebar"
-
 import { UserButton } from "@/components/user-button";
-
 import {
     SignInButton,
     SignUpButton,
@@ -18,41 +16,44 @@ import {
     SignedOut,
 } from '@clerk/nextjs'
 import { ArrowLeftRight, Clock, Home, Search, Wallet } from "lucide-react";
-import { useState, useEffect } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import path from "path";
+import { useState, useEffect, act } from "react";
 
 const items = [
     {
         title: "Home",
-        url: '#',
+        url: '/c',
         icon: Home,
     },
     {
         title: "Portfolio",
-        url: '#',
+        url: '/c/portfolio',
         icon: Wallet,
-
     },
     {
         title: "Explore",
-        url: '#',
+        url: '/c/explore',
         icon: Search,
     },
     {
         title: "Transfer",
-        url: '#',
+        url: '/c/transfer/',
         icon: ArrowLeftRight,
     },
     {
         title: "Transactions",
-        url: '#',
+        url: '/c/transactions',
         icon: Clock,
     },
 ];
 
-type SidebarMode = 'full' | 'collapsed' | 'hidden';
+type SidebarMode = 'full' | 'shrunk' | 'hidden';
 
 export function AppSidebar({ className }: React.ComponentPropsWithoutRef<'div'>) {
     const [sidebarMode, setSidebarMode] = useState<SidebarMode>('full');
+    const pathname = usePathname();
 
     useEffect(() => {
         const handleResize = () => {
@@ -63,7 +64,7 @@ export function AppSidebar({ className }: React.ComponentPropsWithoutRef<'div'>)
             if (screenWidth < oneThirdScreenWidth) {
                 setSidebarMode('hidden');
             } else if (screenWidth < twoThirdsScreenWidth) {
-                setSidebarMode('collapsed');
+                setSidebarMode('shrunk');
             } else {
                 setSidebarMode('full');
             }
@@ -82,31 +83,53 @@ export function AppSidebar({ className }: React.ComponentPropsWithoutRef<'div'>)
         return null; // Don't render the sidebar at all
     }
 
-    const isCollapsed = sidebarMode === 'collapsed';
+    const isShrunk = sidebarMode === 'shrunk';
 
     return (
-        <Sidebar className={`${isCollapsed ? "w-20" : "w-64"} ${className}`} >
+        <Sidebar
+            className={`${isShrunk ? "w-[80px]" : "w-(--sidebar-width)"
+                } ${className}`}
+        >
             {/* < SidebarHeader className={`flex items-center gap-3 p-2 rounded-md gapshadow-none bg-background`}>
             </SidebarHeader> */}
             <SidebarContent className={`shadow-none bg-background`}>
                 <SidebarMenu>
                     {items.map((item) => (
-                        <SidebarMenuItem className="pl-3 pr-3 pt-2 pb-2 ml-4 gap-0" key={item.title}>
-                            <SidebarMenuButton className='[&>svg]:size-7 p-0 hover:bg-background hover:text-foreground text-muted-foreground focus-visible:ring-0 focus-visible:outline-none active:bg-background' asChild>
-                                <a
+                        <SidebarMenuItem
+                            className="pl-3 pr-3 pt-2 pb-2 ml-4 gap-0"
+                            key={item.title}
+                        >
+                            <SidebarMenuButton
+                                className="p-0 hover:bg-background hover:text-foreground text-muted-foreground focus-visible:ring-0 focus-visible:outline-none data-[active=true]:bg-background"
+                                isActive={pathname === item.url}
+                                asChild
+                            >
+                                <Link
+                                    prefetch={false}
                                     href={item.url}
-                                    className={`flex items-center gap-3 rounded-md ${isCollapsed ? 'flex-col justify-center h-16 text-xs' : 'flex-row'} `}
-                                    title={isCollapsed ? item.title : undefined} // Show title on hover when collapsed
+                                    className={`[&>svg]:size-7 > svg flex items-center gap-3 rounded-md overflow-visible ${isShrunk
+                                        ? "flex-col justify-center h-16 text-xs"
+                                        : "flex-row"
+                                        } `}
+                                    title={isShrunk ? item.title : undefined} // Show title on hover when collapsed
                                 >
-                                    <item.icon className={`${isCollapsed ? "mb-1" : ""}`} />
-                                    <span className={isCollapsed ? "text-center" : ""}>{isCollapsed ? item.title : item.title}</span>
-                                </a>
+                                    <item.icon className={`${isShrunk ? "mb-1" : ""}`} />
+                                    <span
+                                        className={`${isShrunk ? "text-center" : ""
+                                            } overflow-visible`}
+                                    >
+                                        {item.title}
+                                    </span>
+                                </Link>
                             </SidebarMenuButton>
                         </SidebarMenuItem>
                     ))}
                 </SidebarMenu>
             </SidebarContent>
-            <SidebarFooter className={`${isCollapsed ? "flex flex-col items-center space-y-2" : ""} shadow-none bg-background`}>
+            <SidebarFooter
+                className={`${isShrunk ? "flex flex-col items-center space-y-2" : ""
+                    } shadow-none bg-background`}
+            >
                 <SignedOut>
                     {/* Consider how SignInButton/SignUpButton render when collapsed */}
                     <SignInButton />
@@ -116,6 +139,6 @@ export function AppSidebar({ className }: React.ComponentPropsWithoutRef<'div'>)
                     <UserButton />
                 </SignedIn>
             </SidebarFooter>
-        </Sidebar >
-    )
+        </Sidebar>
+    );
 }

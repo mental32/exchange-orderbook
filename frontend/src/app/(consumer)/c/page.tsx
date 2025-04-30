@@ -1,22 +1,22 @@
-import { AppSidebar } from "@/components/app-sidebar";
-import { LineChartComp } from "@/components/line-chart";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import GoodMorning from "@/components/good-morning";
+import { MiniPortfolio } from "@/components/mini-portfolio";
+import { Watchlist } from "@/components/watchlist";
+import { MiniExplore } from "@/components/mini-explore";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import SiteFooter from "@/components/site-footer";
 
 export default function Home() {
     return (
-        <div className="m-auto h-full w-full max-h-screen bg-background">
-            <SidebarProvider className="flex flex-col">
-                <header className="flex sticky top-0 z-50 w-full items-center border-b bg-background h-[6rem]"></header>
-                <div className="flex flex-1 max-h-[calc(100vh - 6rem)]">
-                    <AppSidebar className={"static pl-4 pt-6 px-1 border-none shadow-none bg-background top-[6rem] !h-[calc(100svh-6rem)]"}></AppSidebar>
-                    <SidebarInset>
-                        <main>
-                            <LineChartComp></LineChartComp>
-                        </main>
-                    </SidebarInset>
-
-                </div>
-            </SidebarProvider>
-        </div >
+        <div className="grid gap-y-[1rem]">
+            <GoodMorning />
+            <ScrollArea>
+                <section className="grid gap-y-4">
+                    <MiniPortfolio />
+                    <Watchlist />
+                    <MiniExplore />
+                </section>
+            </ScrollArea>
+            <SiteFooter />
+        </div>
     );
 }
