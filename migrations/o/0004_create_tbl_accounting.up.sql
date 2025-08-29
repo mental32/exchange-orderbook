@@ -5,7 +5,7 @@
 --
 CREATE TABLE IF NOT EXISTS accounts (
     id SERIAL PRIMARY KEY,
-    currency TEXT NOT NULL CHECK (currency ~ '^[A-Z]{3,}$'),  -- Currency codes in uppercase
+    currency TEXT NOT NULL CHECK (currency ~ '^[A-Z]{3,7}$'),  -- Currency codes in uppercase
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     source_type TEXT NOT NULL CHECK (source_type IN ('user', 'fiat', 'crypto')),
@@ -23,7 +23,7 @@ INSERT INTO accounts (currency, source_type, source_id) VALUES ('USD', 'fiat', '
 --
 -- the transaction type is used to track the source of the transaction, for example, a user deposit, a user withdrawal, a chain deposit, a chain withdrawal, etc.
 --
--- the amount is the amount of the transaction in the smallest unit of the currency, for example, satoshis for BTC, wei for ETH, cents for USD, etc.
+-- the amount is always a positive number, the credit account is increased by the amount, the debit account is decreased by the amount
 --
 -- the currency is a ISO 4217 currency code in uppercase, or in the case of crypto, the unofficial currency symbol in uppercase
 --
@@ -31,8 +31,8 @@ CREATE TABLE IF NOT EXISTS account_tx_journal (
     id SERIAL PRIMARY KEY,
     credit_account_id INT NOT NULL,
     debit_account_id INT NOT NULL,
-    currency TEXT NOT NULL CHECK (currency ~ '^[A-Z]{3,}$'),
-    amount BIGINT NOT NULL CHECK (amount >= 0),
+    currency TEXT NOT NULL CHECK (currency ~ '^[A-Z]{3,7}$'),
+    amount DECIMAL(20, 8) NOT NULL CHECK (amount >= 0),
     created_at TIMESTAMP NOT NULL DEFAULT current_timestamp,
     transaction_type TEXT NOT NULL,
     FOREIGN KEY (credit_account_id) REFERENCES accounts(id),

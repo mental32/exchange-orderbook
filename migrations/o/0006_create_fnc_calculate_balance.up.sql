@@ -1,9 +1,9 @@
 CREATE OR REPLACE FUNCTION calculate_balance(source_uuid TEXT, currency_code TEXT)
-RETURNS BIGINT AS $$
+RETURNS DECIMAL(20, 8) AS $$
 DECLARE
     account_id INT;
-    credit_total BIGINT;
-    debit_total BIGINT;
+    credit_total DECIMAL(20, 8);
+    debit_total DECIMAL(20, 8);
 BEGIN
     -- Attempt to retrieve the account_id
     SELECT id INTO account_id FROM accounts 
