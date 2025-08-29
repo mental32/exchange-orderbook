@@ -1,7 +1,7 @@
 import SiteFooter from "@/components/site-footer";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { SignedIn, SignedOut, SignInButton, SignUpButton } from "@clerk/nextjs";
+import { SignedIn, SignedOut } from "@clerk/nextjs";
 import { ChartCandlestickIcon } from "lucide-react";
 import Link from "next/link";
 
@@ -19,12 +19,12 @@ export default function App() {
           <div className="flex items-center space-x-4">
             <nav className="flex items-center space-x-2">
               <SignedOut>
-                <SignInButton>
+                <Link href="/sign-in">
                   <Button>Sign In</Button>
-                </SignInButton>
-                <SignUpButton>
+                </Link>
+                <Link href="/sign-up">
                   <Button>Sign Up</Button>
-                </SignUpButton>
+                </Link>
               </SignedOut>
               <SignedIn>
                 <Link href="/c/" className={cn(buttonVariants({ variant: 'link' }))}>
@@ -49,9 +49,7 @@ export default function App() {
                 </p>
                 <div className="flex flex-col sm:flex-row gap-3">
                   <Button asChild size="lg" className="bg-blue-600 hover:bg-blue-700 text-white">
-                    <SignUpButton>
-                      <Link href="/">Get Started</Link>
-                    </SignUpButton>
+                    <Link href="/sign-up">Get Started</Link>
                   </Button>
                 </div>
               </div>

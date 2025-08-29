@@ -10,16 +10,13 @@ import {
 } from "@/components/ui/sidebar"
 import { UserButton } from "@/components/user-button";
 import {
-    SignInButton,
-    SignUpButton,
     SignedIn,
     SignedOut,
 } from '@clerk/nextjs'
-import { ArrowLeftRight, Clock, Home, Search, Wallet } from "lucide-react";
+import { Activity, Home, Search, Wallet } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import path from "path";
-import { useState, useEffect, act } from "react";
+import { useState, useEffect } from "react";
 
 const items = [
     {
@@ -38,14 +35,9 @@ const items = [
         icon: Search,
     },
     {
-        title: "Transfer",
-        url: '/c/transfer/',
-        icon: ArrowLeftRight,
-    },
-    {
-        title: "Transactions",
-        url: '/c/transactions',
-        icon: Clock,
+        title: "Activity",
+        url: '/c/activity',
+        icon: Activity,
     },
 ];
 
@@ -131,12 +123,21 @@ export function AppSidebar({ className }: React.ComponentPropsWithoutRef<'div'>)
                     } shadow-none bg-background`}
             >
                 <SignedOut>
-                    {/* Consider how SignInButton/SignUpButton render when collapsed */}
-                    <SignInButton />
-                    <SignUpButton />
+                    <div className={`${isShrunk ? "flex flex-col space-y-2" : "flex space-x-2"}`}>
+                        <Link href="/sign-in" className="w-full">
+                            <button className="w-full px-3 py-2 text-sm font-medium text-foreground bg-background border border-input rounded-md hover:bg-accent hover:text-accent-foreground transition-colors">
+                                {isShrunk ? "In" : "Sign In"}
+                            </button>
+                        </Link>
+                        <Link href="/sign-up" className="w-full">
+                            <button className="w-full px-3 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-md hover:bg-primary/90 transition-colors">
+                                {isShrunk ? "Up" : "Sign Up"}
+                            </button>
+                        </Link>
+                    </div>
                 </SignedOut>
                 <SignedIn>
-                    <UserButton />
+                    <UserButton mode={sidebarMode} />
                 </SignedIn>
             </SidebarFooter>
         </Sidebar>
