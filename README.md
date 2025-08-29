@@ -12,8 +12,7 @@ _**How do I run this?**_ - A `docker-compose.yml` file is provided so running `d
 _**Do I have permission to run this?**_ - Yes, you have permission to run the software on your personal device for educational purposes only. This means you can use the software to learn and understand the coding practices and techniques employed.
 However, you are not allowed to use the software for any commercial activities, nor can you modify or distribute the software in any form, whether modified or original.
 
-
-Email `mentalfoss+exob@gmail.com` for job offers otherwise use GitHub discussions for questions.
+use GitHub discussions for questions, otherwise e-mail `mentalfoss+exob@gmail.com`
 
 ## Screenshots
 
