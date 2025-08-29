@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                -- First, fetch the required details from the original row\n                WITH original_tx AS (\n                SELECT credit_account_id, debit_account_id, currency, amount\n                    FROM account_tx_journal\n                    WHERE id = $1\n                )\n                -- Then, insert the inverse transaction\n                INSERT INTO account_tx_journal (credit_account_id, debit_account_id, currency, amount, transaction_type)\n                SELECT debit_account_id, credit_account_id, currency, amount, 'revert reserve asset'\n                FROM original_tx\n                RETURNING id\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3fb801e0daa5ed1f52a3d77ba821fbc4b26d2b00a5f85873473d541bb2d7913d"
+}
