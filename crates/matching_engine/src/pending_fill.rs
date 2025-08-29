@@ -1,10 +1,12 @@
 //! Pending fill operations on the [`Orderbook`].
 
-use std::num::NonZeroU32;
-
+use super::orderbook::Order;
+use super::orderbook::OrderIndex;
+use super::orderbook::OrderSide;
+use super::orderbook::OrderType;
+use super::orderbook::Orderbook;
+use crate::decimal::Decimal;
 use thiserror::Error;
-
-use super::orderbook::{Order, OrderIndex, OrderSide, OrderType, Orderbook};
 
 /// An error that can occur when executing a pending fill operation.
 #[derive(Debug, Error)]
@@ -15,7 +17,7 @@ pub enum ExecutePendingFillError {
 }
 
 /// The outcome of a fill operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FillType {
     /// The order was completely filled.
     Complete,
@@ -32,7 +34,7 @@ pub struct MakerFill {
     pub oix: OrderIndex,
     pub maker: Order,
     pub fill_type: FillType,
-    pub fill_amount: u32,
+    pub fill_amount: Decimal,
 }
 
 /// A pending fill operation on the [`Orderbook`].
@@ -93,7 +95,7 @@ impl<'a> PendingFill<'a> {
 
     /// Execute the pending fill operation.
     pub fn commit(self) -> Result<(FillType, Option<Order>), ExecutePendingFillError> {
-        let mut taker_order_remaining_quantity = self.taker.quantity.get();
+        let mut taker_order_remaining_quantity = self.taker.quantity;
 
         for fill in &self.maker_fills {
             if self.orderbook.get_mut(fill.oix).is_none() {
@@ -117,7 +119,7 @@ impl<'a> PendingFill<'a> {
                         .ok_or(ExecutePendingFillError::InvalidOrderIndex(oix))?; // this should never fail because we already checked that the order exists.
                     assert_eq!(maker_order, order);
                     // if this also filled the taker order, then we wont loop again.
-                    taker_order_remaining_quantity -= maker_order.quantity.get();
+                    taker_order_remaining_quantity -= maker_order.quantity;
                 }
                 // partial fill for a maker order also means a complete fill for the taker order.
                 FillType::Partial => {
@@ -126,26 +128,26 @@ impl<'a> PendingFill<'a> {
                         .get_mut(oix)
                         .ok_or(ExecutePendingFillError::InvalidOrderIndex(oix))?; // this should never fail because we already checked that the order exists.
                     assert_eq!(*maker_order, order);
-                    assert!(taker_order_remaining_quantity < maker_order.quantity.get());
-                    maker_order.quantity =
-                    NonZeroU32::new(maker_order.quantity.get() - taker_order_remaining_quantity).expect("partial fills of maker orders will always have a quantity greater than zero");
-                    taker_order_remaining_quantity = 0;
+                    assert!(taker_order_remaining_quantity < maker_order.quantity);
+                    maker_order.quantity = maker_order.quantity - taker_order_remaining_quantity; //).expect("partial fills of maker orders will always have a quantity greater than zero");
+                    taker_order_remaining_quantity = rust_decimal::dec!(0);
                 }
                 FillType::None => unreachable!(),
             }
         }
 
         match self.taker_fill_outcome {
-            FillType::Complete => assert_eq!(taker_order_remaining_quantity, 0),
+            FillType::Complete => assert_eq!(taker_order_remaining_quantity, rust_decimal::dec!(0)),
             FillType::Partial => {
-                assert!(self.taker.quantity.get() > taker_order_remaining_quantity)
+                assert!(self.taker.quantity > taker_order_remaining_quantity)
             }
-            FillType::None => assert_eq!(taker_order_remaining_quantity, self.taker.quantity.get()),
+            FillType::None => assert_eq!(taker_order_remaining_quantity, self.taker.quantity),
         }
 
-        let taker_order = if let Some(quantity) = NonZeroU32::new(taker_order_remaining_quantity) {
+        let taker_order = if taker_order_remaining_quantity != rust_decimal::dec!(0) {
+            // the taker order was partially filled.
             let mut taker_order = self.taker;
-            taker_order.quantity = quantity;
+            taker_order.quantity = taker_order_remaining_quantity;
             Some(taker_order)
         } else {
             // the taker order was completely filled.

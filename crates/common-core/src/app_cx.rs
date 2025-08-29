@@ -9,37 +9,16 @@
 //! you would call `app.place_order(..)`.
 //!
 use std::collections::HashMap;
-use std::num::NonZeroU64;
 
 #[cfg(feature = "argon2")]
 use argon2::password_hash::PasswordHashString;
 
 use serde::Serialize;
-use sqlx::{Executor as _, PgPool};
+use sqlx::PgPool;
 use thiserror::Error;
-use uuid::Uuid;
 
 use crate::bitcoin::BitcoinRpcClient;
 use crate::configuration::Configuration;
-use crate::reserve_ok::ReserveOk;
-use crate::trading::asset::{Asset, AssetKey};
-
-#[derive(Debug, Error)]
-pub enum ReserveError {
-    #[error("insufficient funds")]
-    InsufficientFunds,
-    #[error("database error")]
-    Database(#[from] sqlx::Error),
-}
-
-impl From<ReserveError> for PlaceOrderError {
-    fn from(value: ReserveError) -> Self {
-        match value {
-            ReserveError::InsufficientFunds => PlaceOrderError::InsufficientFunds,
-            ReserveError::Database(_) => todo!("internal error"),
-        }
-    }
-}
 
 #[derive(Debug, Error)]
 pub enum PlaceOrderError {
@@ -118,8 +97,6 @@ pub struct AppCx {
     db: sqlx::PgPool,
     /// The service configuration
     config: Configuration,
-    /// The list of active assets
-    pub assets: &'static [(AssetKey, Asset)],
 }
 
 impl AppCx {
@@ -127,7 +104,6 @@ impl AppCx {
         Self {
             bitcoind_rpc: btc_rpc,
             db,
-            assets: crate::trading::asset::internal_asset_list(),
             config,
         }
     }
@@ -139,14 +115,6 @@ impl AppCx {
     pub fn db(&self) -> PgPool {
         self.db.clone()
     }
-
-    // pub fn trading_engine_state(&self) -> TradingEngineState {
-    //     self.inner_ro.te_state.load(Ordering::Relaxed)
-    // }
-
-    // pub fn set_trading_engine_state(&self, state: TradingEngineState) {
-    //     self.inner_ro.te_state.store(state, Ordering::SeqCst)
-    // }
 }
 
 impl AppCx {
@@ -186,230 +154,103 @@ impl AppCx {
     //     .collect())
     // }
 
-    pub async fn calculate_balance_from_accounting(
-        &self,
-        user_id: Uuid,
-        currency: &str,
-    ) -> Result<Option<NonZeroU64>, sqlx::Error> {
-        let rec = sqlx::query!(
-            r#"
-            SELECT calculate_balance($1, $2);"#,
-            user_id.to_string(),
-            currency
-        )
-        .fetch_one(&self.db)
-        .await?
-        .calculate_balance;
-        tracing::trace!(?rec, %user_id, ?currency, "balance");
-        Ok(NonZeroU64::new(rec.unwrap_or_default() as u64))
-    }
+    // pub async fn update_user_accounts(&self, user_id: Uuid) {
+    //     async fn check_bitcoind(mut cx: AppCx, user_id: Uuid) -> Result<(), sqlx::Error> {
+    //         use crate::bitcoin::proto::ListTransactionsRequest;
 
-    pub async fn update_user_accounts(&self, user_id: Uuid) {
-        async fn check_bitcoind(mut cx: AppCx, user_id: Uuid) -> Result<(), sqlx::Error> {
-            use crate::bitcoin::proto::ListTransactionsRequest;
+    //         let _db = cx.db();
+    //         let mut db = _db.begin().await?;
 
-            let _db = cx.db();
-            let mut db = _db.begin().await?;
+    //         let btc_account_rec = sqlx::query!(
+    //             r#"SELECT id FROM accounts WHERE source_type = 'crypto' AND source_id = 'bitcoin';"#
+    //         )
+    //         .fetch_one(&mut *db)
+    //         .await?;
 
-            let btc_account_rec = sqlx::query!(
-                r#"SELECT id FROM accounts WHERE source_type = 'crypto' AND source_id = 'bitcoin';"#
-            )
-            .fetch_one(&mut *db)
-            .await?;
+    //         let user_account_rec = sqlx::query!(
+    //             "SELECT * FROM accounts WHERE source_id = $1 AND currency = 'BTC' AND source_type = 'user';",
+    //             user_id.to_string()
+    //         )
+    //         .fetch_one(&mut *db)
+    //         .await?;
 
-            let user_account_rec = sqlx::query!(
-                "SELECT * FROM accounts WHERE source_id = $1 AND currency = 'BTC' AND source_type = 'user';",
-                user_id.to_string()
-            )
-            .fetch_one(&mut *db)
-            .await?;
-
-            let tx_journal = sqlx::query!("SELECT * FROM account_tx_journal WHERE credit_account_id = $1 AND debit_account_id = $2 AND currency = 'BTC' AND transaction_type = 'CHAIN.DEPOSIT';", user_account_rec.id, btc_account_rec.id)
-                .fetch_all(&mut *db)
-                .await?
-                .into_iter()
-                .map(|rec| (rec.txid.clone(), rec))
-                .collect::<HashMap<_, _>>();
-
-            let txs = cx
-                .bitcoind_rpc
-                .list_transactions(ListTransactionsRequest {
-                    label: Some(user_id.to_string()),
-                    count: None,
-                    skip: None,
-                    include_watch_only: None,
-                })
-                .await
-                .unwrap()
-                .into_inner();
-
-            for tx in txs.transactions {
-                if tx_journal.contains_key(&tx.txid) {
-                    continue;
-                }
-
-                let _res = sqlx::query!(
-                    r#"INSERT INTO account_tx_journal (
-                        credit_account_id,
-                        debit_account_id,
-                        currency,
-                        amount,
-                        transaction_type,
-                        txid
-                    ) VALUES ($1, $2, 'BTC', $3, 'CHAIN.DEPOSIT', $4)"#,
-                    user_account_rec.id,
-                    btc_account_rec.id,
-                    tx.amount as i64,
-                    tx.txid
-                )
-                .execute(&mut *db)
-                .await?;
-            }
-
-            db.commit().await?;
-
-            Ok(())
-        }
-
-        let check_bitcoind_fut = check_bitcoind(self.clone(), user_id.clone());
-        let (_res,) = tokio::join!(check_bitcoind_fut);
-    }
-
-    pub async fn user_balance(&self, user_id: Uuid) -> Result<HashMap<String, i64>, sqlx::Error> {
-        let mut db = self.db.begin().await?;
-        let mut details = HashMap::new();
-
-        let vec = sqlx::query!(
-            "SELECT DISTINCT currency FROM accounts WHERE source_id = $1;",
-            user_id.to_string()
-        )
-        .fetch_all(&mut *db)
-        .await?;
-
-        for rec in vec {
-            if let Ok(bal) = sqlx::query!(
-                r#"
-                SELECT calculate_balance($1, $2);"#,
-                user_id.to_string(),
-                rec.currency.to_string()
-            )
-            .fetch_one(&mut *db)
-            .await
-            {
-                details.insert(rec.currency, bal.calculate_balance.unwrap_or(0));
-            }
-        }
-
-        Ok(details)
-    }
-
-    pub async fn reserve_by_asset(
-        &self,
-        user_uuid: Uuid,
-        quantity: std::num::NonZeroU32,
-        currency: &str,
-    ) -> Result<ReserveOk, ReserveError> {
-        let balance = self
-            .calculate_balance_from_accounting(user_uuid, currency)
-            .await?;
-
-        let balance = match balance {
-            Some(i) if i.get() >= quantity.get() as u64 => i,
-            _ => return Err(ReserveError::InsufficientFunds),
-        };
-
-        // create a new account_tx_journal record to debit the user's account for the reserved amount.
-        let rec = sqlx::query!(
-            r#"
-            INSERT INTO account_tx_journal (credit_account_id, debit_account_id, currency, amount, transaction_type) VALUES (
-                (SELECT id FROM accounts WHERE source_type = 'fiat' AND source_id = 'exchange' AND currency = $3),
-                (SELECT id FROM accounts WHERE source_type = 'user' AND source_id = $2),
-                $3,
-                $1,
-                'reserve asset'
-            ) RETURNING id
-            "#,
-            quantity.get() as i64,
-            user_uuid.to_string(),
-            currency,
-        ).fetch_one(&self.db).await?;
-
-        tracing::trace!(id = ?rec.id, %user_uuid, "reserved USD fiat from user account");
-
-        let new_balance = self
-            .calculate_balance_from_accounting(user_uuid, currency)
-            .await?;
-        if let Some(nb) = new_balance {
-            assert!(nb.get() < balance.get());
-        }
-
-        Ok(ReserveOk {
-            row_id: rec.id as u32,
-            previous_balance: balance,
-            new_balance,
-        })
-    }
-
-    // pub async fn place_order(
-    //     &self,
-    //     asset: Asset,
-    //     user_uuid: uuid::Uuid,
-    //     trade_add_order: TradeAddOrder,
-    // ) -> Result<(Response<PlaceOrderResult>, ReserveOk), PlaceOrderError> {
-    //     if !matches!(self.trading_engine_state(), TradingEngineState::Running) {
-    //         return Err(PlaceOrderError::TradingEngineUnresponsive);
-    //     }
-
-    //     let TradeAddOrder {
-    //         side,
-    //         order_type,
-    //         stp,
-    //         quantity,
-    //         price,
-    //         time_in_force,
-    //     } = trade_add_order;
-
-    //     let reserve = match side {
-    //         OrderSide::Buy => self.reserve_by_asset(user_uuid, quantity, "USD").await?,
-    //         OrderSide::Sell => {
-    //             self.reserve_by_asset(
-    //                 user_uuid,
-    //                 quantity,
-    //                 match asset {
-    //                     Asset::Bitcoin => "BTC",
-    //                     Asset::Ether => "ETH",
-    //                 },
-    //             )
+    //         let tx_journal = sqlx::query!("SELECT * FROM account_tx_journal WHERE credit_account_id = $1 AND debit_account_id = $2 AND currency = 'BTC' AND transaction_type = 'CHAIN.DEPOSIT';", user_account_rec.id, btc_account_rec.id)
+    //             .fetch_all(&mut *db)
     //             .await?
-    //         }
-    //     };
+    //             .into_iter()
+    //             .map(|rec| (rec.txid.clone(), rec))
+    //             .collect::<HashMap<_, _>>();
 
-    //     tracing::trace!(?reserve.previous_balance, ?reserve.new_balance, "marked funds as reserved");
+    //         let txs = cx
+    //             .bitcoind_rpc
+    //             .list_transactions(ListTransactionsRequest {
+    //                 label: Some(user_id.to_string()),
+    //                 count: None,
+    //                 skip: None,
+    //                 include_watch_only: None,
+    //             })
+    //             .await
+    //             .unwrap()
+    //             .into_inner();
 
-    //     let (place_order_tx, wait_response) = oneshot::channel();
-    //     let place_order = PlaceOrder::new(
-    //         asset,
-    //         user_uuid,
-    //         price,
-    //         quantity,
-    //         order_type,
-    //         stp,
-    //         time_in_force,
-    //         side,
-    //     );
-
-    //     let cmd = TradeCmd::PlaceOrder((place_order, place_order_tx));
-
-    //     match self.te_tx.send(TradingEngineCmd::Trade(cmd)).await {
-    //         Ok(()) => Ok((Response(wait_response), reserve)),
-    //         Err(err) => {
-    //             tracing::warn!(?err, "failed to send place order command to trading engine");
-    //             if let Err(err) = reserve.revert(&self.db).await {
-    //                 tracing::error!(?err, "failed to revert reserve");
+    //         for tx in txs.transactions {
+    //             if tx_journal.contains_key(&tx.txid) {
+    //                 continue;
     //             }
-    //             Err(PlaceOrderError::TradingEngineUnresponsive)
+
+    //             let _res = sqlx::query!(
+    //                 r#"INSERT INTO account_tx_journal (
+    //                     credit_account_id,
+    //                     debit_account_id,
+    //                     currency,
+    //                     amount,
+    //                     transaction_type,
+    //                     txid
+    //                 ) VALUES ($1, $2, 'BTC', $3, 'CHAIN.DEPOSIT', $4)"#,
+    //                 user_account_rec.id,
+    //                 btc_account_rec.id,
+    //                 tx.amount as i64,
+    //                 tx.txid
+    //             )
+    //             .execute(&mut *db)
+    //             .await?;
+    //         }
+
+    //         db.commit().await?;
+
+    //         Ok(())
+    //     }
+
+    //     let check_bitcoind_fut = check_bitcoind(self.clone(), user_id.clone());
+    //     let (_res,) = tokio::join!(check_bitcoind_fut);
+    // }
+
+    // pub async fn user_balance(&self, user_id: Uuid) -> Result<HashMap<String, i64>, sqlx::Error> {
+    //     let mut db = self.db.begin().await?;
+    //     let mut details = HashMap::new();
+
+    //     let vec = sqlx::query!(
+    //         "SELECT DISTINCT currency FROM accounts WHERE source_id = $1;",
+    //         user_id.to_string()
+    //     )
+    //     .fetch_all(&mut *db)
+    //     .await?;
+
+    //     for rec in vec {
+    //         if let Ok(bal) = sqlx::query!(
+    //             r#"
+    //             SELECT calculate_balance($1, $2);"#,
+    //             user_id.to_string(),
+    //             rec.currency.to_string()
+    //         )
+    //         .fetch_one(&mut *db)
+    //         .await
+    //         {
+    //             details.insert(rec.currency, bal.calculate_balance.unwrap_or(0));
     //         }
     //     }
+
+    //     Ok(details)
     // }
 
     // pub async fn cancel_order(
@@ -468,88 +309,88 @@ impl AppCx {
     //     }
     // }
 
-    pub async fn fetch_user_details(
-        &self,
-        user_id: uuid::Uuid,
-    ) -> Result<UserDetails, UserDetailsError> {
-        let mut dtx = self.db.begin().await?;
-        let _ = (*dtx).execute("SET TRANSACTION READ ONLY").await?;
+    // pub async fn fetch_user_details(
+    //     &self,
+    //     user_id: uuid::Uuid,
+    // ) -> Result<UserDetails, UserDetailsError> {
+    //     let mut dtx = self.db.begin().await?;
+    //     let _ = (*dtx).execute("SET TRANSACTION READ ONLY").await?;
 
-        let rec = sqlx::query!(
-            r#"SELECT id, name, role as "role: String"
-            FROM users
-            WHERE id = $1"#,
-            user_id
-        )
-        .fetch_one(&mut *dtx)
-        .await?;
+    //     let rec = sqlx::query!(
+    //         r#"SELECT id, name, role as "role: String"
+    //         FROM users
+    //         WHERE id = $1"#,
+    //         user_id
+    //     )
+    //     .fetch_one(&mut *dtx)
+    //     .await?;
 
-        let addrs = sqlx::query!(
-            r#"SELECT *
-            FROM user_addresses
-            WHERE user_id = $1"#,
-            user_id
-        )
-        .fetch_all(&mut *dtx)
-        .await?;
+    //     let addrs = sqlx::query!(
+    //         r#"SELECT *
+    //         FROM user_addresses
+    //         WHERE user_id = $1"#,
+    //         user_id
+    //     )
+    //     .fetch_all(&mut *dtx)
+    //     .await?;
 
-        let mut accounts = HashMap::new();
-        for rec in addrs {
-            let entry = accounts
-                .entry(rec.currency.clone())
-                .or_insert(UserAccountDetails {
-                    amount: Default::default(),
-                    deposit_address: None,
-                    withrawal_addresses: vec![],
-                });
+    //     let mut accounts = HashMap::new();
+    //     for rec in addrs {
+    //         let entry = accounts
+    //             .entry(rec.currency.clone())
+    //             .or_insert(UserAccountDetails {
+    //                 amount: Default::default(),
+    //                 deposit_address: None,
+    //                 withrawal_addresses: vec![],
+    //             });
 
-            if rec.kind == "deposit" {
-                entry.deposit_address.replace(rec.address_text.clone());
-            } else {
-                entry.withrawal_addresses.push(UserWalletAddr {
-                    text: rec.address_text,
-                    currency: rec.currency,
-                    kind: rec.kind,
-                });
-            }
-        }
+    //         if rec.kind == "deposit" {
+    //             entry.deposit_address.replace(rec.address_text.clone());
+    //         } else {
+    //             entry.withrawal_addresses.push(UserWalletAddr {
+    //                 text: rec.address_text,
+    //                 currency: rec.currency,
+    //                 kind: rec.kind,
+    //             });
+    //         }
+    //     }
 
-        let details = UserDetails {
-            name: rec.name,
-            id: rec.id,
-            role: rec.role,
-            accounts,
-            portfolio: UserPortfolio { value: 0 },
-        };
+    //     let details = UserDetails {
+    //         name: rec.name,
+    //         id: rec.id,
+    //         role: rec.role,
+    //         accounts,
+    //         portfolio: UserPortfolio { value: 0 },
+    //     };
 
-        dtx.commit().await?;
+    //     dtx.commit().await?;
 
-        Ok(details)
-    }
+    //     Ok(details)
+    // }
 
-    pub async fn fetch_user_account(
-        &self,
-        user_id: Uuid,
-        asset: Asset,
-    ) -> Result<Option<UserAccount>, sqlx::Error> {
-        let _rec = match sqlx::query!(
-            r#"SELECT id FROM accounts
-            WHERE currency = $1
-                AND source_type = 'user'
-                AND source_id = $2"#,
-            asset.to_string(),
-            user_id.to_string()
-        )
-        .fetch_one(&self.db)
-        .await
-        {
-            Ok(rec) => rec,
-            Err(sqlx::Error::RowNotFound) => return Ok(None),
-            Err(err) => return Err(err),
-        };
+    // pub async fn fetch_user_account(
+    //     &self,
+    //     user_id: Uuid,
+    //     asset: Asset,
+    // ) -> Result<Option<UserAccount>, sqlx::Error> {
+    //     let _rec = match sqlx::query!(
+    //         r#"SELECT id FROM accounts
+    //         WHERE currency = $1
+    //             AND source_type = 'user'
+    //             AND source_id = $2"#,
+    //         asset.to_string(),
+    //         user_id.to_string()
+    //     )
+    //     .fetch_one(&self.db)
+    //     .await
+    //     {
+    //         Ok(rec) => rec,
+    //         Err(sqlx::Error::RowNotFound) => return Ok(None),
+    //         Err(err) => return Err(err),
+    //     };
 
-        Ok(Some(UserAccount {}))
-    }
+    //     Ok(Some(UserAccount {}))
+    // }
 }
 
 // #[cfg(test)]

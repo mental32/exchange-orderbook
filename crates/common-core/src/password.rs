@@ -1,8 +1,11 @@
 #[cfg(feature = "argon2")]
-use {argon2::PasswordHasher, argon2::password_hash::PasswordHashString};
+use argon2::PasswordHasher;
+#[cfg(feature = "argon2")]
+use argon2::password_hash::PasswordHashString;
 
+use serde::Deserialize;
+use serde::Deserializer;
 use serde::de::Visitor;
-use serde::{Deserialize, Deserializer};
 
 #[derive(Deserialize, Default, Clone)]
 pub struct Password(pub String);

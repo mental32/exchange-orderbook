@@ -1,19 +1,15 @@
 //! Support for bitcoin core rpc.
 
-use std::convert::Infallible;
-use std::time::Duration;
-
 use futures::FutureExt;
 use futures::future::BoxFuture;
-
+use std::time::Duration;
 mod client;
-pub use client::BitcoinRpcClient;
-
-pub mod rpc;
-use rpc::AddressType;
-
 use crate::configuration::Configuration;
 use crate::signal::Signals;
+pub use client::BitcoinRpcClient;
+use rpc::AddressType;
+
+pub mod rpc;
 
 pub mod proto {
     //! Generated code for the protobuf definitions.
@@ -31,7 +27,6 @@ struct BitcoinCoreRpcImpl {
 }
 
 impl proto::bitcoin_core_rpc_server::BitcoinCoreRpc for BitcoinCoreRpcImpl {
-    #[must_use]
     #[allow(clippy::type_complexity, clippy::type_repetition_in_bounds)]
     fn get_new_address<'life0, 'async_trait>(
         &'life0 self,
@@ -94,7 +89,6 @@ impl proto::bitcoin_core_rpc_server::BitcoinCoreRpc for BitcoinCoreRpcImpl {
         .boxed()
     }
 
-    #[must_use]
     #[allow(clippy::type_complexity, clippy::type_repetition_in_bounds)]
     fn list_transactions<'life0, 'async_trait>(
         &'life0 self,

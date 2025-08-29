@@ -1,6 +1,9 @@
 //! Self-trade protection of an order.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
+
+use crate::pending_fill::PendingFill;
 
 /// The self-trade protection of an order.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -23,4 +26,9 @@ impl Default for SelfTradeProtection {
     fn default() -> Self {
         Self::DecreaseCancel
     }
+}
+
+/// Apply self-trade protection to a pending fill.
+pub fn self_trade_protection(pending_fill: &PendingFill<'_>, stp: SelfTradeProtection) {
+    todo!("implement self trade protection: {stp:?}");
 }

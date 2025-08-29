@@ -1,37 +1,79 @@
 #![allow(missing_docs)]
 
+use std::error;
+use std::fmt;
 use std::fmt::Debug;
+use std::io;
 use std::iter::FromIterator;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::{error, fmt, io};
 
 use ahash::HashMap;
+pub use bitcoincore_rpc_json::AddMultiSigAddressResult;
+pub use bitcoincore_rpc_json::AddressType;
+pub use bitcoincore_rpc_json::Bip9SoftforkInfo;
+pub use bitcoincore_rpc_json::Bip9SoftforkStatistics;
+pub use bitcoincore_rpc_json::Bip9SoftforkStatus;
+pub use bitcoincore_rpc_json::BlockRef;
+pub use bitcoincore_rpc_json::CreateRawTransactionInput;
+pub use bitcoincore_rpc_json::EstimateMode;
+pub use bitcoincore_rpc_json::EstimateSmartFeeResult;
+pub use bitcoincore_rpc_json::FinalizePsbtResult;
+pub use bitcoincore_rpc_json::FundRawTransactionOptions;
+pub use bitcoincore_rpc_json::FundRawTransactionResult;
+pub use bitcoincore_rpc_json::GetAddressInfoResult;
+pub use bitcoincore_rpc_json::GetBalancesResult;
+pub use bitcoincore_rpc_json::GetBlockFilterResult;
+pub use bitcoincore_rpc_json::GetBlockHeaderResult;
+pub use bitcoincore_rpc_json::GetBlockResult;
+pub use bitcoincore_rpc_json::GetBlockchainInfoResult;
+pub use bitcoincore_rpc_json::GetDescriptorInfoResult;
+pub use bitcoincore_rpc_json::GetMempoolEntryResult;
+pub use bitcoincore_rpc_json::GetMiningInfoResult;
+pub use bitcoincore_rpc_json::GetNetTotalsResult;
+pub use bitcoincore_rpc_json::GetNetworkInfoResult;
+pub use bitcoincore_rpc_json::GetPeerInfoResult;
+pub use bitcoincore_rpc_json::GetRawTransactionResult;
+pub use bitcoincore_rpc_json::GetTransactionResult;
+pub use bitcoincore_rpc_json::GetTxOutResult;
+pub use bitcoincore_rpc_json::GetTxOutSetInfoResult;
+pub use bitcoincore_rpc_json::GetWalletInfoResult;
+pub use bitcoincore_rpc_json::ImportMultiOptions;
+pub use bitcoincore_rpc_json::ImportMultiRequest;
+pub use bitcoincore_rpc_json::ImportMultiResult;
+pub use bitcoincore_rpc_json::ListReceivedByAddressResult;
+pub use bitcoincore_rpc_json::ListSinceBlockResult;
+pub use bitcoincore_rpc_json::ListTransactionResult;
+pub use bitcoincore_rpc_json::ListUnspentQueryOptions;
+pub use bitcoincore_rpc_json::ListUnspentResultEntry;
+pub use bitcoincore_rpc_json::LoadWalletResult;
+pub use bitcoincore_rpc_json::PubKeyOrAddress;
+pub use bitcoincore_rpc_json::ScanTxOutRequest;
+pub use bitcoincore_rpc_json::ScanTxOutResult;
+pub use bitcoincore_rpc_json::SignRawTransactionInput;
+pub use bitcoincore_rpc_json::SignRawTransactionResult;
+pub use bitcoincore_rpc_json::Softfork;
+pub use bitcoincore_rpc_json::SoftforkType;
+pub use bitcoincore_rpc_json::TestMempoolAcceptResult;
+pub use bitcoincore_rpc_json::WalletCreateFundedPsbtOptions;
+pub use bitcoincore_rpc_json::WalletCreateFundedPsbtResult;
+pub use bitcoincore_rpc_json::bitcoin;
+use bitcoincore_rpc_json::bitcoin::Amount;
+use bitcoincore_rpc_json::bitcoin::OutPoint;
+use bitcoincore_rpc_json::bitcoin::PrivateKey;
+use bitcoincore_rpc_json::bitcoin::PublicKey;
+use bitcoincore_rpc_json::bitcoin::Script;
+use bitcoincore_rpc_json::bitcoin::Transaction;
 use bitcoincore_rpc_json::bitcoin::address::NetworkUnchecked;
 use bitcoincore_rpc_json::bitcoin::hashes::hex::FromHex;
 use bitcoincore_rpc_json::bitcoin::hex::HexToBytesError;
+use bitcoincore_rpc_json::bitcoin::secp256k1;
 use bitcoincore_rpc_json::bitcoin::secp256k1::ecdsa::Signature;
 use bitcoincore_rpc_json::bitcoin::sighash::EcdsaSighashType;
-use bitcoincore_rpc_json::bitcoin::{
-    Amount, OutPoint, PrivateKey, PublicKey, Script, Transaction, secp256k1,
-};
-pub use bitcoincore_rpc_json::{
-    AddMultiSigAddressResult, AddressType, Bip9SoftforkInfo, Bip9SoftforkStatistics,
-    Bip9SoftforkStatus, BlockRef, CreateRawTransactionInput, EstimateMode, EstimateSmartFeeResult,
-    FinalizePsbtResult, FundRawTransactionOptions, FundRawTransactionResult, GetAddressInfoResult,
-    GetBalancesResult, GetBlockFilterResult, GetBlockHeaderResult, GetBlockResult,
-    GetBlockchainInfoResult, GetDescriptorInfoResult, GetMempoolEntryResult, GetMiningInfoResult,
-    GetNetTotalsResult, GetNetworkInfoResult, GetPeerInfoResult, GetRawTransactionResult,
-    GetTransactionResult, GetTxOutResult, GetTxOutSetInfoResult, GetWalletInfoResult,
-    ImportMultiOptions, ImportMultiRequest, ImportMultiResult, ListReceivedByAddressResult,
-    ListSinceBlockResult, ListTransactionResult, ListUnspentQueryOptions, ListUnspentResultEntry,
-    LoadWalletResult, PubKeyOrAddress, ScanTxOutRequest, ScanTxOutResult, SignRawTransactionInput,
-    SignRawTransactionResult, Softfork, SoftforkType, TestMempoolAcceptResult,
-    WalletCreateFundedPsbtOptions, WalletCreateFundedPsbtResult, bitcoin,
-};
 use jsonrpc_async;
 use rustc_hex::ToHex;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Ord, Eq, Hash, Serialize, Deserialize)]
 pub struct Address(pub bitcoincore_rpc_json::bitcoin::Address<NetworkUnchecked>);

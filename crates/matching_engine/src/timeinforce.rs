@@ -1,6 +1,7 @@
 //! Time in force options for orders.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 
 /// Time in force options for orders.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

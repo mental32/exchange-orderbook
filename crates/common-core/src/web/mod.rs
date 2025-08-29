@@ -7,18 +7,24 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::http::header;
-use axum::response::{IntoResponse, Response};
+use axum::response::IntoResponse;
+use axum::response::Response;
 
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 
+use tower_http::LatencyUnit;
+use tower_http::ServiceBuilderExt;
 use tower_http::normalize_path::NormalizePathLayer;
-use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
+use tower_http::request_id::MakeRequestUuid;
+use tower_http::request_id::PropagateRequestIdLayer;
+use tower_http::request_id::SetRequestIdLayer;
 use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::{
-    DefaultMakeSpan, DefaultOnFailure, DefaultOnRequest, DefaultOnResponse, TraceLayer,
-};
-use tower_http::{LatencyUnit, ServiceBuilderExt};
+use tower_http::trace::DefaultMakeSpan;
+use tower_http::trace::DefaultOnFailure;
+use tower_http::trace::DefaultOnRequest;
+use tower_http::trace::DefaultOnResponse;
+use tower_http::trace::TraceLayer;
 
 pub mod middleware;
 

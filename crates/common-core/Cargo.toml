@@ -5,58 +5,63 @@ edition = "2024"
 build = "./build.rs"
 
 [features]
-default = []
+default = ["serde"]
 argon2 = ["dep:argon2"]
+serde = ["dep:serde", "dep:serde_json", "dep:rmp-serde"]
 
 [dependencies]
-ahash = { workspace = true }
-anyhow = { workspace = true }
+ahash.workspace = true
+anyhow.workspace = true
 argon2 = { workspace = true, optional = true }
-async-trait = { workspace = true }
-atomic = { workspace = true }
-axum = { workspace = true }
-axum-extra = { workspace = true }
-axum-htmx = { workspace = true }
-bitcoin = { workspace = true }
-bitcoincore-rpc-json = { workspace = true }
-bytemuck = { workspace = true }
-chrono = { workspace = true }
-clap = { workspace = true }
-crossterm = { workspace = true }
-dotenv = { workspace = true }
-email_address = { workspace = true }
-ethers = { workspace = true }
-futures = { workspace = true }
-hex = { workspace = true }
-jsonrpc-async = { workspace = true }
-mime = { workspace = true }
-mime_guess = { workspace = true }
-minijinja = { workspace = true }
-minijinja-autoreload = { workspace = true }
-prost = { workspace = true }
-rand = { workspace = true }
-ratatui = { workspace = true }
-reqwest = { workspace = true }
-rmp = { workspace = true }
-rmp-serde = { workspace = true }
-rustc-hex = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-sha2 = { workspace = true }
-sqlx = { workspace = true }
-thiserror = { workspace = true }
-time = { workspace = true }
-tinyvec = { workspace = true }
-tokio = { workspace = true }
-tokio-tungstenite = { workspace = true }
-toml = { workspace = true }
-tonic = { workspace = true }
-tonic-reflection = { workspace = true }
-tower = { workspace = true }
-tower-http = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-uuid = { workspace = true }
+async-trait.workspace = true
+atomic.workspace = true
+axum-extra.workspace = true
+axum-htmx.workspace = true
+axum.workspace = true
+bitcoin.workspace = true
+bitcoincore-rpc-json.workspace = true
+bytemuck.workspace = true
+chrono.workspace = true
+clap.workspace = true
+clerk-client = { path = "../clerk/" }
+crossterm.workspace = true
+dotenv.workspace = true
+email_address.workspace = true
+ethers.workspace = true
+futures.workspace = true
+hex.workspace = true
+http-body-util.workspace = true
+jsonrpc-async.workspace = true
+mime_guess.workspace = true
+mime.workspace = true
+minijinja-autoreload.workspace = true
+minijinja.workspace = true
+prost.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+rmp-serde = { workspace = true, optional = true }
+rmp.workspace = true
+rustc-hex.workspace = true
+rust_decimal.workspace = true
+serde_json = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+sha2.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tinyvec.workspace = true
+tokio-tungstenite.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tonic-reflection.workspace = true
+tonic.workspace = true
+tower-http.workspace = true
+tower.workspace = true
+tracing-subscriber.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+jsonwebtoken.workspace = true
+base64 = "0.22.1"
 
 [build-dependencies]
 glob = "0.3.1"

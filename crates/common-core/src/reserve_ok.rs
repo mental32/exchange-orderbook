@@ -19,11 +19,11 @@ impl ReserveOk {
                 -- First, fetch the required details from the original row
                 WITH original_tx AS (
                 SELECT credit_account_id, debit_account_id, currency, amount
-                    FROM account_tx_journal
+                    FROM t_account_tx_journal
                     WHERE id = $1
                 )
                 -- Then, insert the inverse transaction
-                INSERT INTO account_tx_journal (credit_account_id, debit_account_id, currency, amount, transaction_type)
+                INSERT INTO t_account_tx_journal (credit_account_id, debit_account_id, currency, amount, transaction_type)
                 SELECT debit_account_id, credit_account_id, currency, amount, 'revert reserve asset'
                 FROM original_tx
                 RETURNING id

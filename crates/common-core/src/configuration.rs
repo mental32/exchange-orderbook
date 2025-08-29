@@ -12,10 +12,14 @@
 //! struct. The fields are all public the struct is plain-ol-data (POD).
 //!
 
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::path::{Path, PathBuf};
+use std::net::Ipv4Addr;
+use std::net::SocketAddr;
+use std::net::SocketAddrV4;
+use std::os::unix::fs::MetadataExt;
+use std::path::Path;
+use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use anyhow::Context as _;
 
 /// The string key used to check the environment variable for the webserver address.
 pub const WEBSERVER_ADDRESS: &str = "WEBSERVER_ADDRESS";
@@ -42,6 +46,19 @@ fn webserver_address() -> SocketAddr {
                 .ok()
         })
         .unwrap_or(WEBSERVER_ADDRESS_DEFAULT)
+}
+
+/// The default webserver address port.
+pub const TRADING_ADDRESS_DEFAULT_PORT: u16 = 7777;
+
+/// The default webserver address.
+pub const TRADING_ADDRESS_DEFAULT: SocketAddr = SocketAddr::V4(SocketAddrV4::new(
+    Ipv4Addr::UNSPECIFIED,
+    TRADING_ADDRESS_DEFAULT_PORT,
+));
+
+fn trading_address() -> SocketAddr {
+    TRADING_ADDRESS_DEFAULT
 }
 
 /// The string key used to check the environment variable for the database url.
@@ -103,15 +120,19 @@ fn bitcoin_grpc_bind_url_default() -> SocketAddr {
 }
 
 /// deserialize a grpc endpoint from a string.
+#[cfg(feature = "serde")]
 fn de_grpc_endpoint<'de, D>(deserializer: D) -> Result<tonic::transport::Endpoint, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
+    use serde::Deserialize as _;
+
     let st = String::deserialize(deserializer)?;
     tonic::transport::Endpoint::from_shared(st).map_err(serde::de::Error::custom)
 }
 
 /// serialize a grpc endpoint to a string.
+#[cfg(feature = "serde")]
 fn ser_endpoint_to_string<S>(
     endpoint: &tonic::transport::Endpoint,
     serializer: S,
@@ -123,67 +144,91 @@ where
 }
 
 /// application "configuration" loaded from a config file, unspecified values may use the environent variables as fallback.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct Configuration {
     /// Specifies the address to bind the webserver socket to
-    #[serde(default = "webserver_address")]
+    #[cfg_attr(feature = "serde", serde(default = "webserver_address"))]
     pub webserver_bind_addr: SocketAddr,
     /// Specifies the database url (with credentials) to use
-    #[serde(default = "database_url")]
+    #[cfg_attr(feature = "serde", serde(default = "database_url"))]
     pub database_url: String,
     /// Configure the message channel capacity of the trading engine
-    #[serde(default = "default_te_channel_capacity")]
+    #[cfg_attr(feature = "serde", serde(default = "default_te_channel_capacity"))]
     pub te_channel_capacity: usize,
     /// Mnemonic for the exchange Ether wallet
     pub eth_wallet_mnemonic: Option<String>,
-    #[serde(default = "bitcoin_rpc_url")]
+    #[cfg_attr(feature = "serde", serde(default = "bitcoin_rpc_url"))]
     /// Specifies the URL for the bitcoin-rpc service to connect to
     pub bitcoin_rpc_url: String,
     /// The username for auth
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub bitcoin_rpc_auth_user: String,
     /// The password for auth
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub bitcoin_rpc_auth_password: String,
     /// Wallet name for the exchange BTC wallet
-    #[serde(default)]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub bitcoin_wallet_name: String,
     /// Specifies the gRPC URL for the bitcoin-grpc-proxy service
-    #[serde(
-        deserialize_with = "de_grpc_endpoint",
-        serialize_with = "ser_endpoint_to_string",
-        default = "default_bitcoin_grpc_endpoint"
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            deserialize_with = "de_grpc_endpoint",
+            serialize_with = "ser_endpoint_to_string",
+            default = "default_bitcoin_grpc_endpoint"
+        )
     )]
     pub bitcoin_grpc_endpoint: tonic::transport::Endpoint,
     /// Specifies the address to bind the bitcoin-grpc-proxy socket to
-    #[serde(default = "bitcoin_grpc_bind_url_default")]
+    #[cfg_attr(feature = "serde", serde(default = "bitcoin_grpc_bind_url_default"))]
     pub bitcoin_grpc_bind_addr: SocketAddr,
-    /// Get the path to the template directory for [`minijinja`] or "$CWD/templates/" if not set.
-    pub jinja_template_dir: Option<PathBuf>,
-    /// the directory that stores all frontend (FE) files like CSS, HTML fragments, robots.txt, fonts
-    pub fe_web_dir: Option<PathBuf>,
+
+    /// Specifies the address to bind the trading engine socket to
+    #[cfg_attr(feature = "serde", serde(default = "trading_address"))]
+    pub trading_bind_address: SocketAddr,
 }
 
 impl Configuration {
-    /// load directly from a string, should only be used for tests.
+    #[cfg(feature = "serde")]
     #[track_caller]
-    pub fn load_from_toml(st: &str) -> Self {
-        toml::from_str(st).expect("Failed to parse config file")
+    pub fn from_str(st: &str) -> Self {
+        toml::from_str(st).expect("configuration string is not valid toml")
     }
 
-    /// read the TOML from the file at `path`
+    #[cfg(feature = "serde")]
     #[track_caller]
     pub fn load_from_path(path: &Path) -> anyhow::Result<Self> {
-        let config_file_path = path.canonicalize()?;
-        let st = std::fs::read_to_string(config_file_path)?;
-        Ok(toml::from_str(&st)
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?)
+        let config_file_path = path
+            .canonicalize()
+            .context("Failed to canonicalize config file path")?;
+
+        let metadata = std::fs::metadata(&config_file_path)
+            .context("Failed to get metadata for config file")?;
+
+        const SANITY_MAX_CONFIG_FILE_SIZE: u64 = 10 * 1024; // 10 KiB
+
+        assert!(
+            metadata.size() < SANITY_MAX_CONFIG_FILE_SIZE,
+            "How the hell is your config file this big? Size: {} bytes Path: {}",
+            metadata.size(),
+            config_file_path.display()
+        );
+
+        let st = std::fs::read_to_string(config_file_path).context("Failed to read config file")?;
+
+        let configuration = toml::from_str(&st)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
+            .context("Failed to parse config file")?;
+
+        Ok(configuration)
     }
 
     /// A tuple of the user and password for bitcoin-rpc auth
     pub fn bitcoin_rpc_auth(&self) -> (String, String) {
-        let user = self.bitcoin_rpc_auth_user.clone();
-        let password = self.bitcoin_rpc_auth_password.clone();
-        (user, password)
+        // let user = self.bitcoin_rpc_auth_user.clone();
+        // let password = self.bitcoin_rpc_auth_password.clone();
+        // (user, password)
+        todo!()
     }
 }

@@ -2,8 +2,10 @@
 
 use std::str::FromStr as _;
 
-use clap::{Parser, Subcommand};
-use common_core::bitcoin::rpc::{self, RawTx};
+use clap::Parser;
+use clap::Subcommand;
+use common_core::bitcoin::rpc::RawTx;
+use common_core::bitcoin::rpc::{self};
 
 #[derive(Debug, Subcommand)]
 enum Command {

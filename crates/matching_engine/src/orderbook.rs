@@ -1,13 +1,12 @@
 //! The orderbook module contains the data structures and logic for the orderbook.
 
-use std::num::NonZeroU32;
-
-use tinyvec::{TinyVec, tiny_vec};
-
-use serde::{Deserialize, Serialize};
+use crate::decimal::Decimal;
+use tinyvec::TinyVec;
+use tinyvec::tiny_vec;
 
 /// The side of an order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum OrderSide {
     /// Buy side.
@@ -19,7 +18,8 @@ pub enum OrderSide {
 }
 
 /// The type of an order.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum OrderType {
     /// Limit order.
     #[serde(rename = "limit")]
@@ -32,26 +32,12 @@ pub enum OrderType {
 /// The time in force of an order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Order {
-    /// Some distinct, monotonic sequence number for the order.
-    pub(super) memo: u32,
+    /// A distinct, monotonic sequence number for the order.
+    pub memo: u32,
     /// The quantity of the order.
-    pub(super) quantity: NonZeroU32,
+    pub quantity: Decimal,
     /// The price of the order.
-    pub(super) price: NonZeroU32,
-}
-
-impl Order {
-    /// Returns the quantity of the order.
-    #[inline]
-    pub fn quantity(&self) -> NonZeroU32 {
-        self.quantity
-    }
-
-    /// Returns the price of the order.
-    #[inline]
-    pub fn price(&self) -> NonZeroU32 {
-        self.price
-    }
+    pub price: Decimal,
 }
 
 /// The threshold at which the [`PriceLevel`] will switch from using array storage to heap storage.
@@ -61,7 +47,7 @@ const PRICE_LEVEL_INNER_CAPACITY: usize = 64;
 #[derive(Debug, Default)]
 pub struct PriceLevel {
     /// The price of the orders in this price level.
-    price: u32,
+    price: Decimal,
     /// The sequence number generator for the next order to be added to this price level.
     memo_seq: u32,
     /// The inner data structure storing the orders in this price level.
@@ -79,8 +65,12 @@ impl PriceLevel {
 
     #[inline]
     #[track_caller]
-    fn push_order(&mut self, mut t: Order) -> (NonZeroU32, u32) {
-        let price = NonZeroU32::new(self.price).expect("price for price-level should not be zero");
+    fn push_order(&mut self, mut t: Order) -> (Decimal, u32) {
+        assert!(
+            t.price > rust_decimal::dec!(0),
+            "price for price-level should not be zero"
+        );
+        let price = self.price;
         let memo = self.memo_seq;
         self.memo_seq += 1;
         t.memo = memo;
@@ -121,10 +111,8 @@ impl MultiplePriceLevels {
     }
 
     /// Returns the [`PriceLevel`] for the given price.
-    pub fn get_or_insert_price_level(&mut self, price: NonZeroU32) -> &mut PriceLevel {
-        let index = self
-            .inner
-            .binary_search_by_key(&price.get(), |level| level.price);
+    pub fn get_or_insert_price_level(&mut self, price: Decimal) -> &mut PriceLevel {
+        let index = self.inner.binary_search_by_key(&price, |level| level.price);
 
         match index {
             Ok(index) => self.inner.get_mut(index).expect("checked index"),
@@ -132,7 +120,7 @@ impl MultiplePriceLevels {
                 self.inner.insert(
                     index,
                     PriceLevel {
-                        price: price.get(),
+                        price: price,
                         memo_seq: 0,
                         inner: tiny_vec!(),
                     },
@@ -143,10 +131,10 @@ impl MultiplePriceLevels {
     }
 
     /// Pushes an order to the [`MultiplePriceLevels`] returns a tuple of the price and memo of the order.
-    pub fn push_order_to_level(&mut self, t: Order) -> (NonZeroU32, u32) {
+    pub fn push_order_to_level(&mut self, t: Order) -> (Decimal, u32) {
         let index = self
             .inner
-            .binary_search_by_key(&t.price.get(), |level| level.price);
+            .binary_search_by_key(&t.price, |level| level.price);
 
         match index {
             Ok(index) => {
@@ -155,7 +143,7 @@ impl MultiplePriceLevels {
             }
             Err(index) => {
                 let mut price_level_inner = PriceLevel {
-                    price: t.price.get(),
+                    price: t.price,
                     memo_seq: 0,
                     inner: tiny_vec!(),
                 };
@@ -167,10 +155,10 @@ impl MultiplePriceLevels {
     }
 
     /// Removes an order from the [`MultiplePriceLevels`] returns the order if it existed.
-    pub fn remove_order_from_level(&mut self, (price, memo): (NonZeroU32, u32)) -> Option<Order> {
+    pub fn remove_order_from_level(&mut self, (price, memo): (Decimal, u32)) -> Option<Order> {
         let price_level_index = self
             .inner
-            .binary_search_by_key(&price.get(), |level| level.price)
+            .binary_search_by_key(&price, |level| level.price)
             .ok()?;
 
         let price_level = self.inner.get_mut(price_level_index)?;
@@ -187,10 +175,10 @@ impl MultiplePriceLevels {
     }
 
     /// Returns a mutable reference to an [`Order`] in the [`MultiplePriceLevels`] if it exists.
-    pub fn get_mut(&mut self, (price, memo): (NonZeroU32, u32)) -> Option<&mut Order> {
+    pub fn get_mut(&mut self, (price, memo): (Decimal, u32)) -> Option<&mut Order> {
         let index = self
             .inner
-            .binary_search_by_key(&price.get(), |level| level.price)
+            .binary_search_by_key(&price, |level| level.price)
             .ok()?;
 
         self.inner
@@ -203,10 +191,10 @@ impl MultiplePriceLevels {
 }
 
 /// An index into the [`Orderbook`] which can be used to identify an order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OrderIndex {
     side: OrderSide,
-    price: NonZeroU32,
+    price: Decimal,
     memo: u32,
 }
 
@@ -222,7 +210,7 @@ impl Orderbook {
     /// Creates a new [`Orderbook`].
     #[inline]
     #[track_caller]
-    pub fn new() -> Self {
+    pub fn new_empty() -> Self {
         let bids = MultiplePriceLevels {
             inner: tinyvec::tiny_vec!(),
         };

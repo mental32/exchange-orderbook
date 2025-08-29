@@ -1,62 +1,43 @@
-use std::num::NonZeroU32;
-
-use serde::{Deserialize, Serialize};
-
-use crate::trading::{order_uuid::OrderUuid, orderbook::OrderSide};
-
-use super::{
-    asset::{Asset, Assets},
-    orderbook::{Order, OrderIndex, OrderType},
-    pending_fill::{ExecutePendingFillError, FillType},
-    self_trade_protection::SelfTradeProtection,
-    timeinforce::TimeInForce,
-    try_fill_order::try_fill_orders,
-};
+//! Module for placing orders in the matching engine.
+//!
+use super::asset_code::AssetCode;
+use super::orderbook::Order;
+use super::orderbook::OrderIndex;
+use super::orderbook::OrderType;
+use super::pending_fill::ExecutePendingFillError;
+use super::pending_fill::FillType;
+use super::self_trade_protection::SelfTradeProtection;
+use super::timeinforce::TimeInForce;
+use super::try_fill_order::try_fill_orders;
+use crate::decimal::Decimal;
+use crate::order_uuid::OrderUuid;
+use crate::orderbook::OrderSide;
+use crate::orderbook::Orderbook;
+use crate::svc::engine::ReserveByAssetError;
+use common_core::web::middleware::clerk::ClerkUserId;
 
 /// Data for placing an order.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PlaceOrder {
     /// the asset to trade
-    asset: Asset,
+    pub base_quote: (AssetCode, AssetCode),
     /// the user that placed the order
-    user_uuid: uuid::Uuid,
+    pub user_id: ClerkUserId,
     /// the price of the order
-    price: NonZeroU32,
+    #[cfg_attr(feature = "serde", serde(with = "rust_decimal::serde::str"))]
+    pub price: Decimal,
     /// the quantity of the order
-    quantity: NonZeroU32,
+    #[cfg_attr(feature = "serde", serde(with = "rust_decimal::serde::str"))]
+    pub quantity: Decimal,
     /// the type of order
-    order_type: OrderType,
+    pub order_type: OrderType,
     /// the self trade protection setting
-    stp: SelfTradeProtection,
+    pub stp: SelfTradeProtection,
     /// the time in force setting
-    time_in_force: TimeInForce,
+    pub time_in_force: TimeInForce,
     /// the side of the order, buy or sell
-    side: OrderSide,
-}
-
-impl PlaceOrder {
-    /// create a new [`PlaceOrder``]
-    pub fn new(
-        asset: Asset,
-        user_uuid: uuid::Uuid,
-        price: NonZeroU32,
-        quantity: NonZeroU32,
-        order_type: OrderType,
-        stp: SelfTradeProtection,
-        time_in_force: TimeInForce,
-        side: OrderSide,
-    ) -> Self {
-        Self {
-            asset,
-            user_uuid,
-            price,
-            quantity,
-            order_type,
-            stp,
-            time_in_force,
-            side,
-        }
-    }
+    pub side: OrderSide,
 }
 
 /// Error that can occur when placing an order.
@@ -71,28 +52,20 @@ pub enum PlaceOrderError {
     /// error that can occur when executing a pending fill operation.
     #[error("error while executing pending fill")]
     ExecutePendingFillError(#[from] ExecutePendingFillError),
+    /// some asset pair (base/quote) was not found in the system
+    #[error("invalid asset pair")]
+    InvalidAssetPair,
+    /// some error occurred while reserving funds for the order
+    #[error("reserve error")]
+    ReserveError(#[from] ReserveByAssetError),
 }
 
 /// Result of placing an order.
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct PlaceOrderResult {
-    // original order information
-    /// the asset to trade
-    pub asset: Asset,
-    /// the user that placed the order
-    pub user_uuid: uuid::Uuid,
-    /// the price of the order
-    pub price: NonZeroU32,
-    /// the quantity of the order
-    pub quantity: NonZeroU32,
-    /// the type of order
-    pub order_type: OrderType,
-    /// the self trade protection setting
-    pub stp: SelfTradeProtection,
-    /// the time in force setting
-    pub time_in_force: TimeInForce,
-    /// the side of the order, buy or sell
-    pub side: OrderSide,
-    // result of the order
+    /// original order information
+    pub request: PlaceOrder,
+    // --- result of the order
     /// the unique identifier for the order
     pub order_uuid: OrderUuid,
     /// the index of the order in the orderbook
@@ -100,28 +73,26 @@ pub struct PlaceOrderResult {
     /// the type of fill that occurred
     pub fill_type: FillType,
     /// the quantity filled
-    pub quantity_filled: u32,
+    pub quantity_filled: Decimal,
     /// the quantity remaining
-    pub quantity_remaining: u32,
+    pub quantity_remaining: Decimal,
 }
 
 /// place an order
 pub fn do_place_order(
-    assets: &mut Assets,
+    orderbook: &mut Orderbook,
     place_order: PlaceOrder,
 ) -> Result<PlaceOrderResult, PlaceOrderError> {
     let PlaceOrder {
-        asset,
-        user_uuid,
+        base_quote: _,
+        user_id: _,
         price,
         quantity,
         order_type,
         stp,
         time_in_force,
         side,
-    } = place_order;
-
-    let asset_book = assets.match_asset_mut(asset);
+    } = place_order.clone();
 
     let taker: Order = Order {
         memo: u32::MAX,
@@ -130,10 +101,10 @@ pub fn do_place_order(
     };
 
     // create a pending fill and maybe execute it.
-    let pending_fill = try_fill_orders(asset_book.orderbook_mut(), taker, side, order_type)
-        .expect("todo: handle error");
+    let pending_fill =
+        try_fill_orders(orderbook, taker, side, order_type).expect("todo: handle error");
 
-    // TODO: self trade protection
+    crate::self_trade_protection::self_trade_protection(&pending_fill, stp);
 
     // enforce time-in-force depending on fill type.
     match (pending_fill.taker_fill_outcome(), time_in_force) {
@@ -166,44 +137,30 @@ pub fn do_place_order(
                 } else {
                     // order was not completely filled, add it to the orderbook.
                     Some(match side {
-                        OrderSide::Buy => asset_book.orderbook_mut().push_bid(order),
-                        OrderSide::Sell => asset_book.orderbook_mut().push_ask(order),
+                        OrderSide::Buy => orderbook.push_bid(order),
+                        OrderSide::Sell => orderbook.push_ask(order),
                     })
                 };
 
-                assert!(quantity.get() >= order.quantity.get());
+                assert!(quantity >= order.quantity);
 
                 Ok(PlaceOrderResult {
-                    asset,
-                    user_uuid,
+                    request: place_order,
                     order_index,
-                    price,
-                    quantity,
-                    order_type,
-                    stp,
-                    time_in_force,
-                    side,
-                    order_uuid: OrderUuid::new_v4(),
+                    order_uuid: OrderUuid(uuid::Uuid::new_v4()),
                     fill_type,
-                    quantity_filled: quantity.get() - order.quantity.get(),
-                    quantity_remaining: order.quantity.get(),
+                    quantity_filled: quantity - order.quantity,
+                    quantity_remaining: order.quantity,
                 })
             } else {
                 // order is None means that the order was completely filled.
                 Ok(PlaceOrderResult {
-                    asset,
-                    user_uuid,
+                    request: place_order,
                     order_index: None,
-                    price,
-                    quantity,
-                    order_type,
-                    stp,
-                    time_in_force,
-                    side,
-                    order_uuid: OrderUuid::new_v4(),
+                    order_uuid: OrderUuid(uuid::Uuid::new_v4()),
                     fill_type,
-                    quantity_filled: quantity.get(),
-                    quantity_remaining: 0,
+                    quantity_filled: quantity,
+                    quantity_remaining: Decimal::ZERO,
                 })
             }
         }

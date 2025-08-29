@@ -1,27 +1,33 @@
-version: '3.8'
-
 services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3000"
+    networks:
+      - exchange-net
+    environment:
+      - NODE_ENV=production
+    restart: on-failure
+    stop_signal: SIGINT
+
   exchange:
     image: exchange-orderbook:latest
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: crates/common-core/Dockerfile
     ports:
       - "3000:3000"
     volumes:
       - ./etc/exchange/conf.toml:/etc/exchange/conf.toml
-      - ./frontend:/www/
     networks:
       - exchange-net
     environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
       - DATABASE_URL=postgres://exchange_user:exchange_password@postgres:5432/exchange
       - RUST_LOG=debug
       - CONFIG_FILE_PATH=/etc/exchange/conf.toml
       - BITCOIN_RPC_URL=http://bitcoind:8332
-      - JINJA_TEMPLATE_DIR=/www/templates/
-      - FE_WEB_DIR=/www/
     depends_on:
       - postgres
       - bitcoind
@@ -33,7 +39,7 @@ services:
     image: exchange-orderbook:latest
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: crates/common-core/Dockerfile
     ports:
       - "50051:50051"
     volumes:
@@ -47,12 +53,11 @@ services:
       - BITCOIN_RPC_URL=http://bitcoind:8332
     depends_on:
       - bitcoind
-    command: [ "/usr/local/bin/bitcoind-grpc" ]
+    command: ["/usr/local/bin/bitcoind-grpc"]
     restart: on-failure # Restart the service if it fails
     stop_signal: SIGINT # Stop the service gracefully
 
-
-  nginx:
+  nginx: # Commented out for local development - use direct access instead
     image: nginx:latest
     ports:
       - "80:80"
@@ -60,7 +65,11 @@ services:
     volumes:
       - ./etc/nginx/nginx.conf:/etc/nginx/nginx.conf
       - ./etc/letsencrypt/:/etc/letsencrypt:ro
-      - ./frontend/:/www:ro
+    networks:
+      - exchange-net
+    depends_on:
+      - frontend
+      - exchange
 
   postgres:
     image: postgres:latest
@@ -69,10 +78,12 @@ services:
     networks:
       - exchange-net
     environment:
-      - POSTGRES_DB=exchange_db
+      - POSTGRES_DB=exchange
       - POSTGRES_USER=exchange_user
       - POSTGRES_PASSWORD=exchange_password
       - TZ=UTC
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
     restart: always
 
   bitcoind:
@@ -95,5 +106,4 @@ networks:
     driver: bridge
 
 volumes:
-  redis-data:
   postgres-data:

@@ -1,13 +1,9 @@
-use std::collections::HashMap;
-use std::future::Future;
-use std::sync::Arc;
-
-use thiserror::Error;
-use tracing::Instrument;
-
 use crate::app_cx::AppCx;
 use crate::cx::Cx;
 use crate::web;
+use std::future::Future;
+use thiserror::Error;
+use tracing::Instrument;
 
 /// Error returned by [`start_fullstack`].
 #[derive(Debug, Error)]
@@ -28,28 +24,6 @@ pub enum StartFullstackError {
 
 /// Starts the exchange in fullstack mode i.e. all components are ran.
 pub fn serve(cx: Cx) -> impl Future<Output = Result<(), StartFullstackError>> {
-    /// create a future that, depending on the build profile, will either:
-    ///
-    /// - wait for 5 minutes and then resolve (debug)
-    /// - never resolve (release)
-    ///
-    /// This has no real purpose, I just have a habit of forgetting to stop
-    /// exchange when I'm done developing and I don't want to leave it running
-    /// overnight on my laptop.
-    ///
-    fn automatic_shutdown() -> impl std::future::Future<Output = ()> {
-        #[cfg(debug_assertions)]
-        return {
-            const AUTOMATIC_SHUTDOWN_AFTER_DUR: std::time::Duration =
-                std::time::Duration::from_secs(300); // 5 minutes
-
-            tokio::time::sleep(AUTOMATIC_SHUTDOWN_AFTER_DUR)
-        };
-
-        #[cfg(not(debug_assertions))]
-        return std::future::pending();
-    }
-
     async move {
         let config = cx.config();
 

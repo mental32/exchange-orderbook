@@ -1,3 +1,5 @@
+use anyhow::Context;
+
 use crate::configuration::Configuration;
 
 pub struct Cx {
@@ -13,7 +15,8 @@ impl Cx {
             .max_connections(20)
             .min_connections(1)
             .connect(&config.database_url)
-            .await?;
+            .await
+            .context("could not connect to postgres")?;
 
         Ok(Self { config, pool })
     }

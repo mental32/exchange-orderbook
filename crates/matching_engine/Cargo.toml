@@ -1,0 +1,29 @@
+[package]
+name = "matching_engine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ahash.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+chrono.workspace = true
+common-core = { path = "../common-core" }
+dotenv.workspace = true
+futures.workspace = true
+http-body-util.workspace = true
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+sqlx.workspace = true
+thiserror.workspace = true
+tinyvec.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tracing-subscriber.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+rust_decimal.workspace = true
+
+[features]
+default = ["serde"]
+serde = ["dep:serde", "dep:serde_json", "rust_decimal/serde"]
