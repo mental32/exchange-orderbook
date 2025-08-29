@@ -37,7 +37,33 @@ function PointerButton({ icon, text }: { icon: React.ReactNode, text: string }) 
 }
 
 export function MiniPortfolio() {
-    const chartData: null[] = [];
+    const chartData = [
+        // Phase 1: Long period at ~£40
+        { date: "2024-01-01", portfolioValue: 40.00 },
+        { date: "2024-01-15", portfolioValue: 39.50 },
+        { date: "2024-02-01", portfolioValue: 40.25 },
+        { date: "2024-02-15", portfolioValue: 39.75 },
+        { date: "2024-03-01", portfolioValue: 40.50 },
+        { date: "2024-03-15", portfolioValue: 40.10 },
+        { date: "2024-04-01", portfolioValue: 39.90 },
+        { date: "2024-04-15", portfolioValue: 40.30 },
+        { date: "2024-05-01", portfolioValue: 40.00 },
+        
+        // Phase 2: Sharp jump to ~£800 with fluctuations
+        { date: "2024-05-15", portfolioValue: 820.00 },
+        { date: "2024-06-01", portfolioValue: 795.50 },
+        { date: "2024-06-15", portfolioValue: 810.25 },
+        { date: "2024-07-01", portfolioValue: 785.75 },
+        { date: "2024-07-15", portfolioValue: 805.50 },
+        { date: "2024-08-01", portfolioValue: 792.30 },
+        { date: "2024-08-15", portfolioValue: 815.80 },
+        { date: "2024-09-01", portfolioValue: 798.60 },
+        { date: "2024-09-15", portfolioValue: 808.40 },
+        { date: "2024-10-01", portfolioValue: 801.20 },
+        
+        // Phase 3: Another jump to final value £1,234.97
+        { date: "2024-10-15", portfolioValue: 1234.97 }
+    ];
 
     return (
         <Card className="h-[25rem]">
@@ -60,11 +86,11 @@ export function MiniPortfolio() {
                     </CardTitle>
                     <div className="flex items-baseline text-5xl">
                         <span className="text-muted-foreground">£</span>
-                        <span className="text-foreground">1.36</span>
+                        <span style={{ color: 'oklch(0.25 0.133 284)' }}>1,234.97</span>
                     </div>
                     <div className="flex items-center gap-0.5 text-xs">
                         <MoveUpRight color="#35df8d" strokeWidth={3} size={12} />
-                        <span className="text-[#35df8d]">0.13% (£0.0025)</span>
+                        <span className="text-[#139E62]">0.13% (£0.0025)</span>
                         <span className="text-muted-foreground">last month</span>
                     </div>
                 </div>
@@ -110,9 +136,9 @@ export function MiniPortfolio() {
                             }
                         />
                         <Line
-                            // dataKey={activeChart}
+                            dataKey="portfolioValue"
                             type="monotone"
-                            stroke={`--chart-1`}
+                            stroke="#8b5cf6"
                             strokeWidth={2}
                             dot={false}
                         />
