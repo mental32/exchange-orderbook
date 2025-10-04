@@ -1,23 +1,18 @@
-//! Asset feed connects to various exchanges and calculates price changes for assets.
-//!
+#![allow(warnings)]
 
-// pub mod binance;
-// pub mod bitfinex;
-// pub mod bitstamp;
-// pub mod bybit;
-// pub mod coinbase;
-// pub mod gate_io;
-// pub mod gemini;
-// pub mod kraken;
-// pub mod kucoin;
-// pub mod okx;
+pub mod v_binance;
+pub mod v_bitfinex;
+pub mod v_bitstamp;
+pub mod v_bybit;
+pub mod v_coinbase;
+pub mod v_gate_io;
+pub mod v_gemini;
+pub mod v_kraken;
+pub mod v_kucoin;
+pub mod v_okx;
 
-use std::future::Future;
-
-use serde::{Deserialize, Serialize};
-use tracing::Instrument;
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AssetFeedConfig {
     // pub binance: Option<binance::BinanceConfig>,
     // pub bitfinex: Option<bitfinex::BitfinexConfig>,
@@ -26,7 +21,7 @@ pub struct AssetFeedConfig {
     // pub coinbase: Option<coinbase::CoinbaseConfig>,
     // pub gate_io: Option<gate_io::GateIoConfig>,
     // pub gemini: Option<gemini::GeminiConfig>,
-    // pub kraken: Option<kraken::KrakenConfig>,
+    pub kraken: Option<v_kraken::KrakenConfig>,
     // pub kucoin: Option<kucoin::KucoinConfig>,
     // pub okx: Option<okx::OkxConfig>,
 }

@@ -1,0 +1,16 @@
+[package]
+name = "market-data"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
+tokio-tungstenite.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+futures.workspace = true
+reqwest = { workspace = true, features = ["json"] }
