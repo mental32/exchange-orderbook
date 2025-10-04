@@ -1,0 +1,74 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT * FROM t_trading_asset_pairs WHERE status = 'active'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "base_asset",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "quote_asset",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "min_order_size",
+        "type_info": "Numeric"
+      },
+      {
+        "ordinal": 5,
+        "name": "max_order_size",
+        "type_info": "Numeric"
+      },
+      {
+        "ordinal": 6,
+        "name": "price_tick_size",
+        "type_info": "Numeric"
+      },
+      {
+        "ordinal": 7,
+        "name": "quantity_tick_size",
+        "type_info": "Numeric"
+      },
+      {
+        "ordinal": 8,
+        "name": "created_at",
+        "type_info": "Timestamp"
+      },
+      {
+        "ordinal": 9,
+        "name": "updated_at",
+        "type_info": "Timestamp"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f4f467cf55c2b5362fa28a45ea5812ea54498b4abdcac9f1660077d38bbec1d0"
+}

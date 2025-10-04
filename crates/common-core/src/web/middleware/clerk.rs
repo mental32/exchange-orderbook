@@ -5,6 +5,7 @@ use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
 use axum::middleware::Next;
 use axum::response::Response;
+use base64ct::Encoding;
 use clerk_client::apis::Api;
 use clerk_client::apis::configuration::Configuration;
 use clerk_client::models::JwksKeysInner;
@@ -19,12 +20,15 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Mutex;
 
-/// Helper function to deserialize u64 from either number or string
+use crate::secret_str::SecretStr;
+
+#[cfg(feature = "serde")]
 fn deserialize_u64_from_str_or_num<'de, D>(deserializer: D) -> Result<u64, D::Error>
 where
     D: Deserializer<'de>,
@@ -62,29 +66,30 @@ pub struct ClerkState {
 }
 
 impl ClerkState {
-    pub fn new() -> Self {
+    pub fn configured(
+        SecretStr(bearer_access_token): SecretStr,
+        issuer: String,
+        audience: String,
+        require_azp: bool,
+        jwt_leeway_seconds: u64,
+        jwks_cache_ttl: Duration,
+    ) -> Self {
         let mut clerk_config = Configuration::default();
-        clerk_config.bearer_access_token = std::env::var("CLERK_SECRET_KEY").ok();
+        clerk_config.bearer_access_token = Some(bearer_access_token);
 
         let api_client = Arc::new(clerk_client::apis::ApiClient::new(Arc::new(
             clerk_config.clone(),
         )));
 
         Self {
-            clerk_config,
             jwks_cache: Arc::new(Mutex::new(HashMap::new())),
+            clerk_config,
             api_client,
-            issuer: std::env::var("CLERK_ISSUER")
-                .unwrap_or_else(|_| "https://clerk.your-domain.com".to_string()),
-            audience: std::env::var("CLERK_AUDIENCE").unwrap_or_else(|_| "your-app-id".to_string()),
-            jwks_cache_ttl: Duration::from_secs(300), // 5 minutes
-            require_azp: std::env::var("CLERK_REQUIRE_AZP")
-                .map(|s| s == "true" || s == "1")
-                .unwrap_or(false), // Default to false for backward compatibility
-            jwt_leeway_seconds: std::env::var("CLERK_JWT_LEEWAY_SECONDS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(60), // Default 60 seconds
+            issuer,
+            audience,
+            jwks_cache_ttl,
+            require_azp,
+            jwt_leeway_seconds,
         }
     }
 
@@ -291,9 +296,8 @@ impl ClerkState {
             return Err(KidExtractionError::InvalidTokenFormat);
         }
 
-        let header_data =
-            base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, parts[0])
-                .map_err(|_| KidExtractionError::Base64NormalizationError)?;
+        let header_data = base64ct::Base64::decode_vec(&parts[0])
+            .map_err(|_| KidExtractionError::Base64NormalizationError)?;
 
         let header: serde_json::Value = serde_json::from_slice(&header_data)
             .map_err(|_| KidExtractionError::InvalidTokenFormat)?;
@@ -398,6 +402,12 @@ pub struct Clerk {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ClerkUserId(pub String);
+
+impl Display for ClerkUserId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 impl Clerk {
     pub fn user_id(&self) -> ClerkUserId {

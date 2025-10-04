@@ -18,6 +18,7 @@ use serde::Serialize;
 ///
 /// This delegates encoding/decoding to `rust_decimal::Decimal` so it can be
 /// used directly with `sqlx` queries as a parameter and a returned column.
+///
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Money38_18(pub Decimal);
@@ -47,8 +48,6 @@ impl FromStr for Money38_18 {
     }
 }
 
-// --- sqlx traits ---------------------------------------------------------
-
 impl Type<Postgres> for Money38_18 {
     fn type_info() -> PgTypeInfo {
         // Must match the domain/type name in Postgres
@@ -60,7 +59,6 @@ impl<'r> Decode<'r, Postgres> for Money38_18 {
     fn decode(
         value: <Postgres as sqlx::database::HasValueRef<'r>>::ValueRef,
     ) -> Result<Self, sqlx::error::BoxDynError> {
-        // Delegate to Decimal's Decode implementation
         let dec = <Decimal as Decode<Postgres>>::decode(value)?;
         Ok(Money38_18(dec))
     }

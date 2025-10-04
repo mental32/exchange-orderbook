@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO t_account_tx_journal (credit_account_id, debit_account_id, currency, amount, transaction_type) VALUES (\n                (SELECT id FROM t_money_accounts WHERE source_type = 'fiat' AND source_id = 'exchange' AND currency = $3),\n                (SELECT id FROM t_money_accounts WHERE source_type = 'user' AND source_id = $2),\n                $3,\n                $1::numeric,\n                'reserve asset'\n            ) RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Numeric",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e776596562702f8be7e84a1a2ab8ba9b9064c9b8a9e8a74f3476154ad4e5cb24"
+}

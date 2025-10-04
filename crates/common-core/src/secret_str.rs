@@ -3,26 +3,24 @@ use argon2::PasswordHasher;
 #[cfg(feature = "argon2")]
 use argon2::password_hash::PasswordHashString;
 
-use serde::Deserialize;
-use serde::Deserializer;
-use serde::de::Visitor;
+#[derive(Default, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+pub struct SecretStr(pub String);
 
-#[derive(Deserialize, Default, Clone)]
-pub struct Password(pub String);
-
-impl std::fmt::Debug for Password {
+impl std::fmt::Debug for SecretStr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Password").finish()
+        f.debug_tuple("SecretStr").finish()
     }
 }
 
-pub fn de_password_from_str<'de, D>(d: D) -> Result<Password, D::Error>
+#[cfg(feature = "serde")]
+pub fn de_password_from_str<'de, D>(d: D) -> Result<SecretStr, D::Error>
 where
-    D: Deserializer<'de>,
+    D: serde::Deserializer<'de>,
 {
     struct St;
 
-    impl<'de> Visitor<'de> for St {
+    impl<'de> serde::de::Visitor<'de> for St {
         type Value = String;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -44,10 +42,10 @@ where
         }
     }
 
-    d.deserialize_string(St).map(Password)
+    d.deserialize_string(St).map(SecretStr)
 }
 
-impl Password {
+impl SecretStr {
     #[cfg(feature = "argon2")]
     pub fn argon2_hash_password(&self) -> Result<PasswordHashString, argon2::password_hash::Error> {
         let argon2 = argon2::Argon2::default();
