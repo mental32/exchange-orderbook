@@ -1,0 +1,19 @@
+[package]
+name = "cucumber-gherkin"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ariadne = { version = "0.5.1", features = ["auto-color"] }
+chumsky = "0.11.1"
+clap.workspace = true
+crossbeam = "0.8"
+num_cpus = "1.16.0"
+rayon = "1.11.0"
+serde = { workspace = true, optional = true }
+serde_json = { version = "1.0", optional = true }
+yansi = { version = "1.0.1", features = ["detect-env", "detect-tty"] }
+
+[features]
+default = ["serde"]
+serde = ["dep:serde", "dep:serde_json"]
