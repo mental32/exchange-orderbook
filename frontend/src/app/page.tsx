@@ -4,8 +4,10 @@ import { cn } from "@/lib/utils";
 import { SignedIn, SignedOut } from "@clerk/nextjs";
 import { ChartCandlestickIcon } from "lucide-react";
 import Link from "next/link";
+import { sql } from "@/db";
 
-export default function App() {
+export default async function App() {
+
   return (
     <div className={`antialiased flex flex-col min-h-screen`}>
       <header className="sticky top-0 z-40 w-full border-b bg-background">
