@@ -2,37 +2,39 @@ services:
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      dockerfile: ./frontend/Dockerfile
     ports:
       - "3001:3000"
     networks:
       - exchange-net
     environment:
       - NODE_ENV=production
-    restart: on-failure
+    depends_on:
+      - postgres
+    restart: on-failure:3
     stop_signal: SIGINT
 
-  exchange:
+  backend:
     image: exchange-orderbook:latest
     build:
       context: .
-      dockerfile: crates/common-core/Dockerfile
+      dockerfile: crates/matching_engine/Dockerfile
     ports:
       - "3000:3000"
-    volumes:
-      - ./etc/exchange/conf.toml:/etc/exchange/conf.toml
     networks:
       - exchange-net
     environment:
       - DATABASE_URL=postgres://exchange_user:exchange_password@postgres:5432/exchange
-      - RUST_LOG=debug
+      - RUST_LOG=info,exchange=trace,tower_http=debug
       - CONFIG_FILE_PATH=/etc/exchange/conf.toml
       - BITCOIN_RPC_URL=http://bitcoind:8332
+      - TRADING_BIND_ADDRESS="0.0.0.0:7777"
+      - BITCOIN_GRPC_ENDPOINT="http://bitcoind-grpc-proxy:50051"
     depends_on:
       - postgres
       - bitcoind
       - bitcoind-grpc-proxy
-    restart: on-failure # Restart the service if it fails
+    restart: on-failure:3
     stop_signal: SIGINT # Stop the service gracefully
 
   bitcoind-grpc-proxy:
@@ -42,22 +44,23 @@ services:
       dockerfile: crates/common-core/Dockerfile
     ports:
       - "50051:50051"
-    volumes:
-      - ./etc/exchange/conf.toml:/etc/exchange/conf.toml
     networks:
       - exchange-net
     environment:
       - RUST_LOG="info"
       - DATABASE_URL=postgres://exchange_user:exchange_password@postgres:5432/exchange
-      - CONFIG_FILE_PATH=/etc/exchange/conf.toml
       - BITCOIN_RPC_URL=http://bitcoind:8332
+      - INFURA_WS="wss://goerli.infura.io/ws/v3/15420f8445614737ba63730cbc019cf2"
+      - BITCOIN_RPC_AUTH_USER="bobby"
+      - BITCOIN_RPC_AUTH_PASSWORD="bobby"
+      - BITCOIN_WALLET_NAME="org.exchange.wallet"
     depends_on:
       - bitcoind
     command: ["/usr/local/bin/bitcoind-grpc"]
     restart: on-failure # Restart the service if it fails
     stop_signal: SIGINT # Stop the service gracefully
 
-  nginx: # Commented out for local development - use direct access instead
+  nginx:
     image: nginx:latest
     ports:
       - "80:80"
@@ -69,7 +72,7 @@ services:
       - exchange-net
     depends_on:
       - frontend
-      - exchange
+      - backend
 
   postgres:
     image: postgres:latest
@@ -84,15 +87,15 @@ services:
       - TZ=UTC
     volumes:
       - postgres-data:/var/lib/postgresql/data
-    restart: always
+    restart: on-failure
 
   bitcoind:
-    image: lncm/bitcoind:v25.0
+    image: lncm/bitcoind:v28.0
     user: 1000:1000
     volumes:
       - ./etc/bitcoin:/data/.bitcoin
     restart: on-failure
-    stop_grace_period: 15m30s
+    stop_grace_period: 1m
     ports:
       - "8333:8333"
       - "8332:8332"

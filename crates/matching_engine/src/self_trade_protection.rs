@@ -29,6 +29,6 @@ impl Default for SelfTradeProtection {
 }
 
 /// Apply self-trade protection to a pending fill.
-pub fn self_trade_protection(pending_fill: &PendingFill<'_>, stp: SelfTradeProtection) {
+pub fn self_trade_protection(_pending_fill: &PendingFill<'_>, stp: SelfTradeProtection) {
     todo!("implement self trade protection: {stp:?}");
 }

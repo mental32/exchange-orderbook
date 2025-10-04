@@ -1,111 +1,55 @@
 use super::ap_actor;
 use crate::asset_code::AssetCode;
+use crate::asset_code::SymbolVocabulary;
+use crate::asset_pair::BaseQuote;
 use crate::order_uuid::OrderUuid;
 use crate::orderbook::OrderIndex;
 use crate::orderbook::OrderSide;
 use crate::place_order::PlaceOrderError;
-use crate::reserve_ok::ReserveOk;
+use crate::reserve_money::ReserveMoney;
+use crate::reserve_money::reserve_by_asset;
 use crate::svc::routes;
 use common_core::money38_18::Money38_18;
 use common_core::web::middleware::clerk::ClerkUserId;
+use futures::FutureExt as _;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::sync::oneshot::error::RecvError;
 
-#[derive(Debug, thiserror::Error)]
-pub enum ReserveByAssetError {
-    #[error("insufficient funds")]
-    InsufficientFunds,
-    #[error("database error")]
-    Database(#[from] sqlx::Error),
-}
+// ... I am still deciding what type of map I want to use
+type Map<K, V> = ahash::AHashMap<K, V>;
 
 #[derive(Debug, thiserror::Error)]
 #[error("order not found for user {0:?} and order uuid {1:?}")]
 pub struct OrderNotFound(ClerkUserId, OrderUuid);
 
-#[derive(Debug, Clone)]
-pub struct MatchingEngineFacade {
-    /// the database connection pool
-    pub pool: sqlx::Pool<sqlx::Postgres>,
+#[derive(Debug)]
+pub struct SvcState {
     /// list of (base/quote, sender) tuples for each asset pair actor
-    pub ap_list: Vec<((AssetCode, AssetCode), mpsc::Sender<ap_actor::Envelope>)>,
-    /// map of order uuids to order indexes and assets.
-    pub order_uuids: ahash::AHashMap<OrderUuid, (OrderIndex, (AssetCode, AssetCode))>,
+    pub asset_processors: Vec<((AssetCode, AssetCode), mpsc::Sender<ap_actor::Envelope>)>,
+    /// associate order uuids with order indexes and asset codes
+    pub order_uuids: Map<OrderUuid, (OrderIndex, (AssetCode, AssetCode))>,
+    /// associate user ids with websocket sessions
+    pub websocket_sessions: RwLock<Vec<(ClerkUserId, mpsc::Sender<routes::trade_ws::SystemMsg>)>>,
+    /// symbol vocabulary maps strings to numbers that [`AssetCode`] uses.
+    pub symbol_vocabulary: SymbolVocabulary,
 }
 
-impl MatchingEngineFacade {
-    pub async fn calculate_balance_from_accounting(
-        &self,
-        user_id: ClerkUserId,
-        currency: AssetCode,
-    ) -> Result<Option<Money38_18>, sqlx::Error> {
-        let rec = sqlx::query!(
-            r#"SELECT f_calculate_balance($1, $2) as f_calculate_balance"#,
-            user_id.0,
-            currency.to_string()
-        )
-        .fetch_one(&self.pool)
-        .await?;
+#[derive(Debug, Clone)]
+pub struct EngineFacade {
+    pub pg_pool: sqlx::Pool<sqlx::Postgres>,
+    pub inner: Arc<SvcState>,
+}
 
-        return Ok(rec.f_calculate_balance.map(Money38_18));
-    }
-
-    pub async fn reserve_by_asset(
-        &self,
-        user_id: ClerkUserId,
-        quantity: Money38_18,
-        currency: AssetCode,
-    ) -> Result<crate::reserve_ok::ReserveOk, ReserveByAssetError> {
-        let balance = self
-            .calculate_balance_from_accounting(user_id.clone(), currency)
-            .await?
-            .expect("i dont know in what scenario this would be none");
-
-        // create a new account_tx_journal record to debit the user's account for the reserved amount.
-        let rec = sqlx::query!(
-            r#"
-            INSERT INTO t_account_tx_journal (credit_account_id, debit_account_id, currency, amount, transaction_type) VALUES (
-                (SELECT id FROM t_money_accounts WHERE source_type = 'fiat' AND source_id = 'exchange' AND currency = $3),
-                (SELECT id FROM t_money_accounts WHERE source_type = 'user' AND source_id = $2),
-        $3,
-        $1::numeric,
-                'reserve asset'
-            ) RETURNING id
-            "#,
-            quantity.0,
-            user_id.0,
-            currency.to_string(),
-        )
-        .fetch_one(&self.pool)
-        .await?;
-        let id: i32 = rec.id;
-
-        tracing::trace!(id = id, ?user_id, "reserved USD fiat from user account");
-
-        let new_balance = self
-            .calculate_balance_from_accounting(user_id, currency)
-            .await?;
-        if let Some(nb) = &new_balance {
-            // Money38_18 implements Ord via the inner Decimal, compare by reference
-            assert!(nb < &balance);
-        }
-
-        Ok(crate::reserve_ok::ReserveOk {
-            row_id: id as u32,
-            previous_balance: balance.0,
-            new_balance: new_balance.map(|m| m.0),
-        })
-    }
-
+impl EngineFacade {
     pub async fn cancel_order(
         &self,
         order_uuid: OrderUuid,
         user_id: ClerkUserId,
-    ) -> Result<
-        oneshot::Receiver<Result<Option<ap_actor::MessageResult>, ap_actor::Error>>,
-        OrderNotFound,
-    > {
-        let (order_index, base_quote) = match self.order_uuids.get(&order_uuid).cloned() {
+    ) -> Result<oneshot::Receiver<ap_actor::Response>, OrderNotFound> {
+        let (order_index, base_quote) = match self.inner.order_uuids.get(&order_uuid).cloned() {
             Some((a, b)) => (a, b),
             None => {
                 return Err(OrderNotFound(user_id, order_uuid));
@@ -113,7 +57,8 @@ impl MatchingEngineFacade {
         };
 
         let Some((_, tx)) = self
-            .ap_list
+            .inner
+            .asset_processors
             .iter()
             .find(|(ap, _)| *ap == base_quote)
             .cloned()
@@ -131,8 +76,8 @@ impl MatchingEngineFacade {
             order_index,
         };
 
-        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-        let envelope = (resp_tx, ap_actor::Message::CancelOrder(co));
+        let (snd, rcv) = tokio::sync::oneshot::channel();
+        let envelope = (snd, vec![ap_actor::MessageIn::CancelOrder(co)]);
         if let Err(err) = tx.send(envelope).await {
             tracing::error!(
                 ?err,
@@ -155,85 +100,102 @@ impl MatchingEngineFacade {
         //     }
         // }
 
-        Ok(resp_rx)
+        Ok(rcv)
     }
 
     pub async fn place_order(
         &self,
-        base_quote: (AssetCode, AssetCode),
+        (base, quote): (AssetCode, AssetCode),
         user_id: ClerkUserId,
         order: routes::trade_add_order::TradeAddOrder,
-    ) -> Result<
-        (
-            oneshot::Receiver<Result<Option<ap_actor::MessageResult>, ap_actor::Error>>,
-            ReserveOk,
-        ),
-        PlaceOrderError,
-    > {
-        let Some((_, tx)) = self
-            .ap_list
+    ) -> Result<OrderUuid, PlaceOrderError> {
+        let Some((_, ap_snd)) = self
+            .inner
+            .asset_processors
             .iter()
-            .find(|(ap, _)| *ap == base_quote)
+            .find(|(ap, _)| *ap == (base, quote))
             .cloned()
         else {
             tracing::error!(
-                ?base_quote,
+                base = ?base.as_str(&self.inner.symbol_vocabulary),
+                quote = ?quote.as_str(&self.inner.symbol_vocabulary),
                 "attempted to place order on non-existent asset pair"
             );
             return Err(PlaceOrderError::InvalidAssetPair);
         };
 
-        let (base, quote) = base_quote;
-        let quantity = order.quantity;
+        let order_uuid = crate::order_uuid::OrderUuid(uuid::Uuid::new_v4());
 
-        // convert Decimal quantity into Money38_18 for reservations
-        let qty_money = Money38_18(quantity);
-
-        let reserve = match order.side {
-            OrderSide::Buy => {
-                self.reserve_by_asset(user_id.clone(), qty_money.clone(), quote)
-                    .await?
-            }
-            OrderSide::Sell => {
-                self.reserve_by_asset(user_id.clone(), qty_money.clone(), base)
-                    .await?
-            }
-        };
-
-        tracing::trace!(?reserve.previous_balance, ?reserve.new_balance, "marked funds as reserved");
-
-        let po = crate::place_order::PlaceOrder {
-            base_quote,
-            user_id,
-            side: order.side,
-            order_type: order.order_type,
-            quantity: order.quantity,
-            price: order.price,
-            time_in_force: order.time_in_force,
-            stp: order.stp,
-        };
-
-        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-        let envelope = (resp_tx, ap_actor::Message::PlaceOrder(po));
-        if let Err(err) = tx.send(envelope).await {
-            tracing::error!(
-                ?err,
-                "error sending place order message to asset pair actor"
+        let order_index = {
+            let (msg_snd, msg_rcv) = tokio::sync::oneshot::channel();
+            let envelope = (
+                msg_snd,
+                vec![ap_actor::MessageIn::PlaceOrder(
+                    crate::place_order::PlaceOrderArgs {
+                        base_quote: (base, quote),
+                        user_id,
+                        order_uuid,
+                        details: order,
+                    },
+                )],
             );
-            panic!("error sending place order message to asset pair actor");
+            if let Err(err) = ap_snd.send(envelope).await {
+                tracing::error!(
+                    ?err,
+                    "error sending place order message to asset pair actor"
+                );
+                panic!("error sending place order message to asset pair actor");
+            }
+
+            let ap_actor::MessageOut::PlaceOrder(crate::place_order::PlaceOrderResult {
+                order_index,
+                original_args: request,
+                ..
+            }) = msg_rcv
+                .map(
+                    |result: Result<ap_actor::Response, RecvError>| match result {
+                        Ok(Ok(msg_out)) => msg_out[0].clone(),
+                        Ok(Err(err)) => todo!("asset processor error: {}", err),
+                        Err(RecvError) => panic!("asset processor may have died"),
+                    },
+                )
+                .await
+            else {
+                panic!("unexpected message result from asset pair actor");
+            };
+
+            order_index
+        };
+
+        // If the order has a resting portion in the orderbook, store the UUID mapping for cancellation
+        if let Some(order_index) = order_index {
+            // engine
+            //     .inner
+            //     .order_uuids
+            //     .insert(*order_uuid, (*order_index, base_quote));
+            tracing::debug!(
+                ?order_uuid,
+                ?order_index,
+                "stored UUID mapping for order tracking"
+            );
         }
 
-        return Ok((resp_rx, reserve));
+        tracing::info!(?order_uuid, "order placed");
+
+        Ok(order_uuid.clone())
     }
 
-    pub fn db(&self) -> sqlx::Pool<sqlx::Postgres> {
-        self.pool.clone()
-    }
-
-    pub fn is_pair_enabled(&self, base_quote: String) -> Option<(AssetCode, AssetCode)> {
-        self.ap_list
+    pub fn is_pair_enabled(&self, base_quote: &str) -> Option<BaseQuote> {
+        self.inner
+            .asset_processors
             .iter()
-            .find(|((base, quote), _)| format!("{base}/{quote}") == base_quote)
+            .find(|((base, quote), _)| {
+                format!(
+                    "{base}/{quote}",
+                    base = base.as_str(&self.inner.symbol_vocabulary),
+                    quote = quote.as_str(&self.inner.symbol_vocabulary)
+                ) == base_quote
+            })
             .map(|(ap, _)| ap.clone())
     }
 }

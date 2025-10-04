@@ -1,32 +1,104 @@
 //! The orderbook module contains the data structures and logic for the orderbook.
 
-use crate::decimal::Decimal;
+use crate::decimal::NonZeroDecimal;
 use tinyvec::TinyVec;
 use tinyvec::tiny_vec;
 
-/// The side of an order.
+/// Side of an order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[repr(u8)]
+#[repr(u8)] // XXX: this could be premature optimization.
 pub enum OrderSide {
-    /// Buy side.
+    /// Buy/"Bid"
     #[serde(rename = "buy")]
     Buy,
-    /// Sell side.
+    /// Sell/"Ask"
     #[serde(rename = "sell")]
     Sell,
 }
 
-/// The type of an order.
+/// The execution model of the order.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum OrderType {
-    /// Limit order.
+    /// The full order quantity is placed immediately with a limit price restriction to only trade at this price or better.
     #[serde(rename = "limit")]
     Limit,
-    /// Market order.
+    /// The full order quantity executes immediately at the best available price in the order book.
     #[serde(rename = "market")]
     Market,
+    /// A market order is triggered when the reference price reaches the stop price (from an unfavourable direction).
+    #[serde(rename = "stop-loss")]
+    StopLoss,
+    /// A limit order is triggered when the reference price reaches the stop price (from an unfavourable direction).
+    #[serde(rename = "stop-loss-limit")]
+    StopLossLimit,
+    /// A market order is triggered when the reference price reaches the stop price (from an favourable direction).
+    #[serde(rename = "take-profit")]
+    TakeProfit,
+    /// A limit order is triggered when the reference price reaches the stop price (from an favourable direction).
+    #[serde(rename = "take-profit-limit")]
+    TakeProfitLimit,
+    /// A market order is triggered when the market reverts a specified distance from the peak price.
+    #[serde(rename = "trailing-stop")]
+    TrailingStop,
+    /// A limit order is triggered when the market reverts a specified distance from the peak price.
+    #[serde(rename = "trailing-stop-limit")]
+    TrailingStopLimit,
+    /// Hides the full order size by only showing your chosen display size in the book at your limit price.
+    #[serde(rename = "iceberg")]
+    Iceberg,
+}
+
+#[cfg_attr(test, test)]
+#[cfg_attr(not(test), allow(dead_code))]
+fn test_de_order_type() {
+    #[derive(Debug, PartialEq, serde::Deserialize)]
+    struct Shim {
+        t: OrderType,
+    }
+
+    macro_rules! d {
+        ($string:literal) => {
+            ::serde_json::from_str::<Shim>($string).unwrap()
+        };
+    }
+    assert_eq!(
+        d!("{\"t\": \"limit\"}"),
+        Shim {
+            t: OrderType::Limit
+        }
+    );
+    assert_eq!(
+        d!("{\"t\": \"take-profit\"}"),
+        Shim {
+            t: OrderType::TakeProfit
+        }
+    );
+    assert_eq!(
+        d!("{\"t\": \"take-profit-limit\"}"),
+        Shim {
+            t: OrderType::TakeProfitLimit
+        }
+    );
+    assert_eq!(
+        d!("{\"t\": \"trailing-stop\"}"),
+        Shim {
+            t: OrderType::TrailingStop
+        }
+    );
+    assert_eq!(
+        d!("{\"t\": \"trailing-stop-limit\"}"),
+        Shim {
+            t: OrderType::TrailingStopLimit
+        }
+    );
+    assert_eq!(
+        d!("{\"t\": \"iceberg\"}"),
+        Shim {
+            t: OrderType::Iceberg
+        }
+    );
 }
 
 /// The time in force of an order.
@@ -35,19 +107,19 @@ pub struct Order {
     /// A distinct, monotonic sequence number for the order.
     pub memo: u32,
     /// The quantity of the order.
-    pub quantity: Decimal,
+    pub quantity: NonZeroDecimal,
     /// The price of the order.
-    pub price: Decimal,
+    pub price: NonZeroDecimal,
 }
 
 /// The threshold at which the [`PriceLevel`] will switch from using array storage to heap storage.
-const PRICE_LEVEL_INNER_CAPACITY: usize = 64;
+const PRICE_LEVEL_INNER_CAPACITY: usize = 32;
 
 /// The inner data structure for a [`MultiplePriceLevels`].
 #[derive(Debug, Default)]
 pub struct PriceLevel {
     /// The price of the orders in this price level.
-    price: Decimal,
+    price: NonZeroDecimal,
     /// The sequence number generator for the next order to be added to this price level.
     memo_seq: u32,
     /// The inner data structure storing the orders in this price level.
@@ -65,11 +137,7 @@ impl PriceLevel {
 
     #[inline]
     #[track_caller]
-    fn push_order(&mut self, mut t: Order) -> (Decimal, u32) {
-        assert!(
-            t.price > rust_decimal::dec!(0),
-            "price for price-level should not be zero"
-        );
+    fn push_order(&mut self, mut t: Order) -> (NonZeroDecimal, u32) {
         let price = self.price;
         let memo = self.memo_seq;
         self.memo_seq += 1;
@@ -111,7 +179,7 @@ impl MultiplePriceLevels {
     }
 
     /// Returns the [`PriceLevel`] for the given price.
-    pub fn get_or_insert_price_level(&mut self, price: Decimal) -> &mut PriceLevel {
+    pub fn get_or_insert_price_level(&mut self, price: NonZeroDecimal) -> &mut PriceLevel {
         let index = self.inner.binary_search_by_key(&price, |level| level.price);
 
         match index {
@@ -131,7 +199,7 @@ impl MultiplePriceLevels {
     }
 
     /// Pushes an order to the [`MultiplePriceLevels`] returns a tuple of the price and memo of the order.
-    pub fn push_order_to_level(&mut self, t: Order) -> (Decimal, u32) {
+    pub fn push_order_to_level(&mut self, t: Order) -> (NonZeroDecimal, u32) {
         let index = self
             .inner
             .binary_search_by_key(&t.price, |level| level.price);
@@ -155,7 +223,10 @@ impl MultiplePriceLevels {
     }
 
     /// Removes an order from the [`MultiplePriceLevels`] returns the order if it existed.
-    pub fn remove_order_from_level(&mut self, (price, memo): (Decimal, u32)) -> Option<Order> {
+    pub fn remove_order_from_level(
+        &mut self,
+        (price, memo): (NonZeroDecimal, u32),
+    ) -> Option<Order> {
         let price_level_index = self
             .inner
             .binary_search_by_key(&price, |level| level.price)
@@ -175,7 +246,7 @@ impl MultiplePriceLevels {
     }
 
     /// Returns a mutable reference to an [`Order`] in the [`MultiplePriceLevels`] if it exists.
-    pub fn get_mut(&mut self, (price, memo): (Decimal, u32)) -> Option<&mut Order> {
+    pub fn get_mut(&mut self, (price, memo): (NonZeroDecimal, u32)) -> Option<&mut Order> {
         let index = self
             .inner
             .binary_search_by_key(&price, |level| level.price)
@@ -194,7 +265,7 @@ impl MultiplePriceLevels {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OrderIndex {
     side: OrderSide,
-    price: Decimal,
+    price: NonZeroDecimal,
     memo: u32,
 }
 

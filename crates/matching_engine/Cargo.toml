@@ -1,28 +1,31 @@
 [package]
-name = "matching_engine"
-version = "0.1.0"
-edition = "2024"
+name = "matching-engine"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 ahash.workspace = true
 anyhow.workspace = true
 axum.workspace = true
+bitcoind-grpc = { path = "../bitcoind-grpc/" }
 chrono.workspace = true
 common-core = { path = "../common-core" }
 dotenv.workspace = true
 futures.workspace = true
 http-body-util.workspace = true
+itertools.workspace = true
+rust_decimal.workspace = true
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 sqlx.workspace = true
 thiserror.workspace = true
 tinyvec.workspace = true
 tokio.workspace = true
+tonic.workspace = true
 tower.workspace = true
 tracing-subscriber.workspace = true
 tracing.workspace = true
 uuid.workspace = true
-rust_decimal.workspace = true
 
 [features]
 default = ["serde"]

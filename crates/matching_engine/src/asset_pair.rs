@@ -2,6 +2,7 @@
 //!
 
 use crate::asset_code::AssetCode;
+use crate::asset_code::SymbolVocabulary;
 use crate::decimal::Decimal;
 use sqlx::types::time::PrimitiveDateTime;
 
@@ -29,18 +30,9 @@ pub struct AssetPairRow {
 
 impl AssetPairRow {
     /// the asset pair as (base, quote)
-    pub fn base_quote(&self) -> (AssetCode, AssetCode) {
-        assert!(self.base_asset.len() >= 3 && self.base_asset.len() <= 8);
-        assert!(self.quote_asset.len() >= 3 && self.quote_asset.len() <= 8);
-
-        let mut buf = [0u8; 8];
-
-        buf[..self.base_asset.len()].copy_from_slice(self.base_asset.as_bytes());
-        let base = AssetCode(buf);
-
-        buf[..self.quote_asset.len()].copy_from_slice(self.quote_asset.as_bytes());
-        let quote = AssetCode(buf);
-
-        (base, quote)
+    pub fn base_quote(&self, vocabulary: &SymbolVocabulary) -> Option<(AssetCode, AssetCode)> {
+        let base = AssetCode::from_str_and_vocabulary(&self.base_asset, vocabulary);
+        let quote = AssetCode::from_str_and_vocabulary(&self.quote_asset, vocabulary);
+        base.zip(quote)
     }
 }

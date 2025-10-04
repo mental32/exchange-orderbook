@@ -1,12 +1,8 @@
 //! logic for canceling orders in the orderbook
-//!
-
-use common_core::web::middleware::clerk::ClerkUserId;
-
+use super::order_uuid::OrderUuid;
 use crate::orderbook::Order;
 use crate::orderbook::OrderIndex;
-
-use super::order_uuid::OrderUuid;
+use common_core::web::middleware::clerk::ClerkUserId;
 
 /// Data for canceling an order.
 #[derive(Debug)]
