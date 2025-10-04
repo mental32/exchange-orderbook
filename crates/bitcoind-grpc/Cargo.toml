@@ -1,0 +1,30 @@
+[package]
+name = "bitcoind-grpc"
+edition = "2024"
+version.workspace = true
+
+[features]
+default = ["serde"]
+serde = ["dep:serde_json", "dep:serde"]
+
+[dependencies]
+ahash.workspace = true
+bitcoin.workspace = true
+bitcoincore-rpc-json.workspace = true
+common-core = { path = "../common-core" }
+clap.workspace = true
+dotenv.workspace = true
+futures.workspace = true
+jsonrpc-async.workspace = true
+rustc-hex.workspace = true
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+tonic-reflection.workspace = true
+tonic.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+prost.workspace = true
+
+[build-dependencies]
+glob = "0.3.1"
+tonic-build = "0.10.2"

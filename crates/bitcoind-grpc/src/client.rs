@@ -1,13 +1,11 @@
 use tonic::transport::Endpoint;
 
-use super::proto::GetNewAddressRequest;
 use super::proto::bitcoin_core_rpc_client::BitcoinCoreRpcClient;
 
 // async fn bitcoind_rpc_client(
 //     config: &Config,
 // ) -> Result<crate::bitcoin::BitcoinRpcClient, StartFullstackError> {
 //     use jsonrpc_async::{self as jsonrpc, simple_http::SimpleHttpTransport};
-
 //     let (username, password) = config.bitcoin_rpc_auth();
 //     let transport = SimpleHttpTransport::builder()
 //         .auth(username, Some(password))
@@ -15,9 +13,7 @@ use super::proto::bitcoin_core_rpc_client::BitcoinCoreRpcClient;
 //         .await
 //         .unwrap()
 //         .build();
-
 //     let client = BitcoinCoreRpc::new(jsonrpc::Client::with_transport(transport));
-
 //     match client.load_wallet(config.bitcoin_wallet_name()).await {
 //         Ok(crate::bitcoin::LoadWalletResult { name, warning }) => {
 //             tracing::info!(name = ?name, warning = warning, "loaded exchange wallet from remote node");
@@ -32,7 +28,6 @@ use super::proto::bitcoin_core_rpc_client::BitcoinCoreRpcClient;
 //             return Err(StartFullstackError::BitcoinRpc);
 //         }
 //     };
-
 //     Ok(client)
 // }
 
@@ -62,26 +57,5 @@ impl BitcoinRpcClient {
     /// Create a dummy client used for testing
     pub fn new_mock() -> Self {
         Self(Inner::Mock)
-    }
-
-    /// Generate a new wallet address
-    pub async fn get_new_address(
-        &mut self,
-        request: GetNewAddressRequest,
-    ) -> Result<tonic::Response<super::proto::GetNewAddressResponse>, tonic::Status> {
-        match &mut self.0 {
-            Inner::Grpc(grpc) => grpc.get_new_address(request).await,
-            Inner::Mock => panic!(),
-        }
-    }
-
-    pub async fn list_transactions(
-        &mut self,
-        request: super::proto::ListTransactionsRequest,
-    ) -> Result<tonic::Response<super::proto::ListTransactionsResponse>, tonic::Status> {
-        match &mut self.0 {
-            Inner::Grpc(grpc) => grpc.list_transactions(request).await,
-            Inner::Mock => panic!(),
-        }
     }
 }

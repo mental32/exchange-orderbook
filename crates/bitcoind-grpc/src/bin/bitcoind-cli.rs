@@ -1,11 +1,10 @@
 #![allow(warnings)]
 
-use std::str::FromStr as _;
-
+use bitcoind_grpc::rpc::RawTx;
+use bitcoind_grpc::rpc::{self};
 use clap::Parser;
 use clap::Subcommand;
-use common_core::bitcoin::rpc::RawTx;
-use common_core::bitcoin::rpc::{self};
+use std::str::FromStr as _;
 
 #[derive(Debug, Subcommand)]
 enum Command {
@@ -66,8 +65,10 @@ fn main() {
         command,
     } = Args::parse();
 
-    tokio::runtime::Runtime::new()
-        .unwrap()
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to build runtime")
         .block_on(async move {
             let transport = jsonrpc_async::simple_http::SimpleHttpTransport::builder()
                 .auth(user, Some(pass))
