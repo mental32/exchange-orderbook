@@ -3,17 +3,37 @@
 use std::fmt::Display;
 use std::sync::Arc;
 
+use crate::asset_pair::BaseQuote;
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SymbolVocabulary(Arc<[Box<str>]>);
 
-impl FromIterator<String> for SymbolVocabulary {
-    fn from_iter<T: IntoIterator<Item = String>>(iter: T) -> Self {
-        SymbolVocabulary(
+impl SymbolVocabulary {
+    pub fn new_from_iter_unique<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let this = Self(
             iter.into_iter()
                 .map(|s: String| s.into_boxed_str())
                 .collect(),
-        )
+        );
+        assert!(
+            this.0.len() == itertools::Itertools::unique(this.0.iter()).count(),
+            "invariant: symbol vocabulary must not contain duplicates"
+        );
+        this
+    }
+
+    pub fn parse(&self, input: &str) -> Result<BaseQuote, ()> {
+        todo!("just an idea for now")
+    }
+}
+
+impl FromIterator<String> for SymbolVocabulary {
+    fn from_iter<T: IntoIterator<Item = String>>(iter: T) -> Self {
+        Self::new_from_iter_unique(iter)
     }
 }
 

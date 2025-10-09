@@ -27,6 +27,10 @@ impl Deref for NonZeroDecimal {
 }
 
 impl NonZeroDecimal {
+    pub const ONE: Self = Self(Decimal::ONE);
+    pub const ONE_HUNDRED: Self = Self(Decimal::ONE_HUNDRED);
+    pub const MAX: Self = Self(Decimal::MAX);
+
     pub fn new(value: Decimal) -> Result<Self, ()> {
         if value <= Decimal::ZERO {
             Err(())
