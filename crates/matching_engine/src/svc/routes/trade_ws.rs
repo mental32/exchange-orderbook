@@ -16,7 +16,7 @@ use futures::stream::SplitStream;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-pub type SystemMsg = ();
+pub type WsRpcMsg = ();
 
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -95,7 +95,7 @@ pub async fn f(
             loop {
                 enum Either {
                     Left(Option<Result<Message, axum::Error>>),
-                    Right(Option<SystemMsg>),
+                    Right(Option<WsRpcMsg>),
                 }
 
                 let either = tokio::select! {

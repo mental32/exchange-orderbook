@@ -1,13 +1,14 @@
 //! The orderbook module contains the data structures and logic for the orderbook.
-
 use crate::decimal::NonZeroDecimal;
-use tinyvec::TinyVec;
-use tinyvec::tiny_vec;
+use crate::order_uuid::OrderUuid;
+use crate::place_order::OrderDetails;
+use common_core::web::middleware::clerk::ClerkUserId; // XXX: not sure how i feel about coupling user id with clerk
+use std::u32;
 
 /// Side of an order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[repr(u8)] // XXX: this could be premature optimization.
+#[repr(u8)] // XXX: repr(u8) could be pre-mature optimisation.
 pub enum OrderSide {
     /// Buy/"Bid"
     #[serde(rename = "buy")]
@@ -22,31 +23,31 @@ pub enum OrderSide {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum OrderType {
     /// The full order quantity is placed immediately with a limit price restriction to only trade at this price or better.
-    #[serde(rename = "limit")]
+    #[cfg_attr(feature = "serde", serde(rename = "limit"))]
     Limit,
     /// The full order quantity executes immediately at the best available price in the order book.
-    #[serde(rename = "market")]
+    #[cfg_attr(feature = "serde", serde(rename = "market"))]
     Market,
     /// A market order is triggered when the reference price reaches the stop price (from an unfavourable direction).
-    #[serde(rename = "stop-loss")]
+    #[cfg_attr(feature = "serde", serde(rename = "stop-loss"))]
     StopLoss,
     /// A limit order is triggered when the reference price reaches the stop price (from an unfavourable direction).
-    #[serde(rename = "stop-loss-limit")]
+    #[cfg_attr(feature = "serde", serde(rename = "stop-loss-limit"))]
     StopLossLimit,
     /// A market order is triggered when the reference price reaches the stop price (from an favourable direction).
-    #[serde(rename = "take-profit")]
+    #[cfg_attr(feature = "serde", serde(rename = "take-profit"))]
     TakeProfit,
     /// A limit order is triggered when the reference price reaches the stop price (from an favourable direction).
-    #[serde(rename = "take-profit-limit")]
+    #[cfg_attr(feature = "serde", serde(rename = "take-profit-limit"))]
     TakeProfitLimit,
     /// A market order is triggered when the market reverts a specified distance from the peak price.
-    #[serde(rename = "trailing-stop")]
+    #[cfg_attr(feature = "serde", serde(rename = "trailing-stop"))]
     TrailingStop,
     /// A limit order is triggered when the market reverts a specified distance from the peak price.
-    #[serde(rename = "trailing-stop-limit")]
+    #[cfg_attr(feature = "serde", serde(rename = "trailing-stop-limit"))]
     TrailingStopLimit,
     /// Hides the full order size by only showing your chosen display size in the book at your limit price.
-    #[serde(rename = "iceberg")]
+    #[cfg_attr(feature = "serde", serde(rename = "iceberg"))]
     Iceberg,
 }
 
@@ -101,226 +102,295 @@ fn test_de_order_type() {
     );
 }
 
-/// The time in force of an order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Order {
-    /// A distinct, monotonic sequence number for the order.
-    pub memo: u32,
-    /// The quantity of the order.
-    pub quantity: NonZeroDecimal,
-    /// The price of the order.
+/// The self-trade protection of an order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum SelfTradeProtection {
+    /// resting order will be canceled
+    #[serde(rename = "co")]
+    CancelOldest,
+    /// arriving order will be canceled
+    #[serde(rename = "cn")]
+    CancelNewest,
+    /// both arriving and resting orders will be canceled
+    #[serde(rename = "cb")]
+    CancelBoth,
+}
+
+impl Default for SelfTradeProtection {
+    fn default() -> Self {
+        Self::CancelNewest // Default to safest option: skip self-trades
+    }
+}
+
+/// Time in force options for orders.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum TimeInForce {
+    /// Good Til Canceled, default. The order will remain open until it is either filled or canceled.
+    #[serde(rename = "gtc")]
+    GoodTilCanceled,
+    /// Good Til Date specified. The order will remain open until it is either filled or canceled. it will automatically cancel at the specified timestamp.
+    #[serde(rename = "gtd")]
+    GoodTilDate,
+    /// Immediate Or Cancel. The order must be filled immediately and any unfilled portion of the order will be canceled.
+    #[serde(rename = "ioc")]
+    ImmediateOrCancel,
+    /// Fill Or Kill. The order must be filled immediately in its entirety or it will be canceled. The difference between this and IOC is that GTC orders will be placed on the book until canceled instead of being canceled at the end of the trading day.
+    #[serde(rename = "fok")]
+    FillOrKill,
+}
+
+impl Default for TimeInForce {
+    fn default() -> Self {
+        Self::GoodTilCanceled
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub(crate) struct OrderData {
+    /// A distinct number for this bit of data.
+    pub timestamp: u32,
+    /// Price at which the order is placed.
     pub price: NonZeroDecimal,
+    /// unfilled part of the position
+    pub remaining_quantity: NonZeroDecimal,
+    /// The unique identifier for the order.
+    pub order_id: OrderUuid,
+    /// For Iceberg orders: the visible quantity in the book (None for regular orders)
+    pub display_quantity: Option<NonZeroDecimal>,
+    /// User ID of the order owner (for self-trade protection)
+    pub user_id: ClerkUserId,
 }
 
-/// The threshold at which the [`PriceLevel`] will switch from using array storage to heap storage.
-const PRICE_LEVEL_INNER_CAPACITY: usize = 32;
+type PriceLevelSegment<'a> = &'a [OrderData];
 
-/// The inner data structure for a [`MultiplePriceLevels`].
-#[derive(Debug, Default)]
-pub struct PriceLevel {
-    /// The price of the orders in this price level.
-    price: NonZeroDecimal,
-    /// The sequence number generator for the next order to be added to this price level.
-    memo_seq: u32,
-    /// The inner data structure storing the orders in this price level.
-    inner: TinyVec<[Option<Order>; PRICE_LEVEL_INNER_CAPACITY]>,
-}
-
-impl PriceLevel {
-    /// Returns an iterator over the [`Order`]s in the [`PriceLevel`].
-    #[track_caller]
-    pub fn iter(&self) -> impl Iterator<Item = &Order> + '_ {
-        self.inner
-            .iter()
-            .map(|o| o.as_ref().expect("all valid orders are always Some"))
-    }
-
-    #[inline]
-    #[track_caller]
-    fn push_order(&mut self, mut t: Order) -> (NonZeroDecimal, u32) {
-        let price = self.price;
-        let memo = self.memo_seq;
-        self.memo_seq += 1;
-        t.memo = memo;
-        let rval = (price, memo);
-        self.inner.push(Some(t));
-        rval
-    }
-
-    fn remove_order(&mut self, memo: u32) -> Option<Order> {
-        let index = self.iter().position(|o| o.memo == memo)?;
-        let rval = self.inner.remove(index);
-
-        if self.inner.len() <= PRICE_LEVEL_INNER_CAPACITY {
-            self.inner.shrink_to_fit();
-        }
-
-        rval
-    }
-}
-
-/// The threshold at which the [`MultiplePriceLevels`] will switch from using array storage to heap storage.
-pub const MULTIPLE_PRICE_LEVEL_INNER_CAPACITY: usize = 64;
-
-/// Stores multiple price levels in a contiguous vector.
-pub struct MultiplePriceLevels {
-    pub(super) inner: TinyVec<[PriceLevel; MULTIPLE_PRICE_LEVEL_INNER_CAPACITY]>,
+/// Price-level aggregation storing multiple price levels in one contiguous array.
+struct MultiplePriceLevels {
+    counter: u32,
+    /// All resting orders in the book in one contiguous array.
+    orders: Vec<OrderData>,
 }
 
 impl MultiplePriceLevels {
-    /// Returns an iterator over the [`PriceLevel`]s in the [`MultiplePriceLevels`] in decenting order.
-    pub(crate) fn iter_inner_rev(&self) -> impl Iterator<Item = &PriceLevel> + '_ {
-        self.inner.iter().rev()
-    }
+    /// insert the order into its price level range in the book
+    #[track_caller]
+    fn insert_order<D>(
+        &mut self,
+        price: NonZeroDecimal,
+        order_id: OrderUuid,
+        user_id: ClerkUserId,
+        details: D,
+    ) -> (usize, u32)
+    where
+        D: OrderDetails,
+    {
+        let remaining_quantity = details
+            .quantity()
+            .expect("invariant: quantity must be non-zero and checked before inserting");
+        let display_quantity = details.display_quantity();
 
-    /// Returns an iterator over the [`PriceLevel`]s in the [`MultiplePriceLevels`] in ascending order.
-    pub(crate) fn iter_inner(&self) -> impl Iterator<Item = &PriceLevel> + '_ {
-        self.inner.iter()
-    }
+        // invariant: display_quantity must not exceed remaining_quantity
+        if let Some(display_qty) = display_quantity {
+            assert!(
+                display_qty <= remaining_quantity,
+                "invariant: display_quantity ({}) cannot exceed remaining_quantity ({})",
+                *display_qty,
+                *remaining_quantity
+            );
+        }
 
-    /// Returns the [`PriceLevel`] for the given price.
-    pub fn get_or_insert_price_level(&mut self, price: NonZeroDecimal) -> &mut PriceLevel {
-        let index = self.inner.binary_search_by_key(&price, |level| level.price);
+        // invariant: counter must not overflow to maintain timestamp uniqueness
+        assert!(
+            self.counter < u32::MAX,
+            "invariant: timestamp counter overflow would break uniqueness"
+        );
+        let timestamp = self.counter + 1;
+        self.counter += 1;
 
-        match index {
-            Ok(index) => self.inner.get_mut(index).expect("checked index"),
+        match self.orders.binary_search_by(
+            |probe: &OrderData| {
+                probe
+                    .price
+                    .cmp(&price)
+                    .then(probe.timestamp.cmp(&timestamp))
+            }, // this should "swing right" so we can insert at the end of the price level
+        ) {
+            Ok(index) => unreachable!(
+                "not possible for an order in the price level to have the same timestamp as a new order"
+            ),
             Err(index) => {
-                self.inner.insert(
+                self.orders.insert(
                     index,
-                    PriceLevel {
-                        price: price,
-                        memo_seq: 0,
-                        inner: tiny_vec!(),
+                    OrderData {
+                        timestamp: timestamp,
+                        price,
+                        remaining_quantity,
+                        order_id,
+                        display_quantity,
+                        user_id,
                     },
                 );
-                self.inner.get_mut(index).expect("checked index")
+
+                // invariant: verify global price-time ordering is maintained
+                for (i, order) in self.orders.iter().enumerate() {
+                    if i > 0 {
+                        let prev = &self.orders[i - 1];
+                        assert!(
+                            prev.price < order.price
+                                || (prev.price == order.price && prev.timestamp < order.timestamp),
+                            "invariant: orders must be sorted by price then timestamp at index {} (prev: {:?}@{}, current: {:?}@{})",
+                            i,
+                            prev.price,
+                            prev.timestamp,
+                            order.price,
+                            order.timestamp
+                        );
+                    }
+                }
+
+                (index, timestamp)
             }
         }
     }
 
-    /// Pushes an order to the [`MultiplePriceLevels`] returns a tuple of the price and memo of the order.
-    pub fn push_order_to_level(&mut self, t: Order) -> (NonZeroDecimal, u32) {
-        let index = self
-            .inner
-            .binary_search_by_key(&t.price, |level| level.price);
-
-        match index {
-            Ok(index) => {
-                let price_level = self.inner.get_mut(index);
-                price_level.expect("checked index").push_order(t)
-            }
-            Err(index) => {
-                let mut price_level_inner = PriceLevel {
-                    price: t.price,
-                    memo_seq: 0,
-                    inner: tiny_vec!(),
-                };
-                let ret = price_level_inner.push_order(t);
-                self.inner.insert(index, price_level_inner);
-                ret
-            }
+    fn remove_order(&mut self, price: NonZeroDecimal, timestamp: u32) -> Option<OrderData> {
+        if let Ok(index) = self.orders.binary_search_by(|probe| {
+            probe
+                .price
+                .cmp(&price)
+                .then(probe.timestamp.cmp(&timestamp))
+        }) {
+            Some(self.orders.remove(index))
+        } else {
+            None
         }
     }
 
-    /// Removes an order from the [`MultiplePriceLevels`] returns the order if it existed.
-    pub fn remove_order_from_level(
-        &mut self,
-        (price, memo): (NonZeroDecimal, u32),
-    ) -> Option<Order> {
-        let price_level_index = self
-            .inner
-            .binary_search_by_key(&price, |level| level.price)
-            .ok()?;
-
-        let price_level = self.inner.get_mut(price_level_index)?;
-        let order = price_level.remove_order(memo);
-
-        if price_level.inner.is_empty() {
-            self.inner.remove(price_level_index);
-            if self.inner.len() <= MULTIPLE_PRICE_LEVEL_INNER_CAPACITY {
-                self.inner.shrink_to_fit();
-            }
+    fn get(&self, price: NonZeroDecimal, timestamp: u32) -> Option<&OrderData> {
+        if let Ok(index) = self.orders.binary_search_by(|probe| {
+            probe
+                .price
+                .cmp(&price)
+                .then(probe.timestamp.cmp(&timestamp))
+        }) {
+            self.orders.get(index)
+        } else {
+            None
         }
-
-        order
     }
 
-    /// Returns a mutable reference to an [`Order`] in the [`MultiplePriceLevels`] if it exists.
-    pub fn get_mut(&mut self, (price, memo): (NonZeroDecimal, u32)) -> Option<&mut Order> {
-        let index = self
-            .inner
-            .binary_search_by_key(&price, |level| level.price)
-            .ok()?;
-
-        self.inner
-            .get_mut(index)?
-            .inner
-            .iter_mut()
-            .find(|o| matches!(o, Some(o) if o.memo == memo))
-            .map(|o| o.as_mut().expect("checked order"))
+    fn get_mut(&mut self, price: NonZeroDecimal, timestamp: u32) -> Option<&mut OrderData> {
+        if let Ok(index) = self.orders.binary_search_by(|probe| {
+            probe
+                .price
+                .cmp(&price)
+                .then(probe.timestamp.cmp(&timestamp))
+        }) {
+            self.orders.get_mut(index)
+        } else {
+            None
+        }
     }
 }
 
 /// An index into the [`Orderbook`] which can be used to identify an order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OrderIndex {
-    side: OrderSide,
-    price: NonZeroDecimal,
-    memo: u32,
+    pub side: OrderSide,
+    pub price: NonZeroDecimal,
+    pub timestamp: u32,
 }
 
-/// The orderbook.
+/// Central Limit Order Book storing orders in price-time priority (price levels with FIFO ordering within each level)
 pub struct Orderbook {
-    /// The bids in the orderbook.
-    pub(super) bids: MultiplePriceLevels,
-    /// The asks in the orderbook.
-    pub(super) asks: MultiplePriceLevels,
+    /// bids side of the book
+    bids: MultiplePriceLevels,
+    /// asks side of the book
+    asks: MultiplePriceLevels,
 }
 
 impl Orderbook {
-    /// Creates a new [`Orderbook`].
-    #[inline]
-    #[track_caller]
     pub fn new_empty() -> Self {
         let bids = MultiplePriceLevels {
-            inner: tinyvec::tiny_vec!(),
+            orders: vec![],
+            counter: 0,
         };
         let asks = MultiplePriceLevels {
-            inner: tinyvec::tiny_vec!(),
+            orders: vec![],
+            counter: 0,
         };
         Self { bids, asks }
     }
 
-    /// add a new bid to the orderbook, returns the [`OrderIndex`] for the order.
-    #[inline]
-    #[track_caller]
-    pub fn push_bid(&mut self, t: Order) -> OrderIndex {
-        let (price, memo) = self.bids.push_order_to_level(t);
-        let side = OrderSide::Buy;
-        OrderIndex { side, price, memo }
+    pub fn insert<D>(
+        &mut self,
+        price: NonZeroDecimal,
+        order_id: OrderUuid,
+        user_id: ClerkUserId,
+        details: D,
+    ) -> OrderIndex
+    where
+        D: OrderDetails,
+    {
+        let side = details.order_side();
+        let mut levels = match side {
+            OrderSide::Buy => &mut self.bids,
+            OrderSide::Sell => &mut self.asks,
+        };
+
+        let (index, timestamp) = levels.insert_order(price, order_id, user_id, details);
+        OrderIndex {
+            side,
+            price,
+            timestamp,
+        }
     }
 
-    /// add a new ask to the orderbook, returns the [`OrderIndex`] for the order.
-    #[inline]
-    #[track_caller]
-    pub fn push_ask(&mut self, t: Order) -> OrderIndex {
-        let (price, memo) = self.asks.push_order_to_level(t);
-        let side = OrderSide::Sell;
-        OrderIndex { side, price, memo }
-    }
-
-    /// remove an order from the orderbook, returns the order if it existed.
-    #[inline]
-    #[track_caller]
-    pub fn remove(&mut self, order_index: OrderIndex) -> Option<Order> {
-        let OrderIndex { side, price, memo } = order_index;
+    pub fn remove(&mut self, order_index: OrderIndex) -> Option<OrderData> {
+        let OrderIndex {
+            side,
+            price,
+            timestamp,
+        } = order_index;
 
         let levels = match side {
             OrderSide::Buy => &mut self.bids,
             OrderSide::Sell => &mut self.asks,
         };
 
-        levels.remove_order_from_level((price, memo))
+        levels.remove_order(price, timestamp)
+    }
+
+    pub fn get(&self, order_index: OrderIndex) -> Option<&OrderData> {
+        let OrderIndex {
+            side,
+            price,
+            timestamp,
+        } = order_index;
+
+        let levels = match side {
+            OrderSide::Buy => &self.bids,
+            OrderSide::Sell => &self.asks,
+        };
+
+        levels.get(price, timestamp)
+    }
+
+    pub fn get_mut(&mut self, order_index: OrderIndex) -> Option<&mut OrderData> {
+        let OrderIndex {
+            side,
+            price,
+            timestamp,
+        } = order_index;
+
+        let levels = match side {
+            OrderSide::Buy => &mut self.bids,
+            OrderSide::Sell => &mut self.asks,
+        };
+
+        levels.get_mut(price, timestamp)
     }
 
     /// construct an iterator of the side of the book specified, the ordering is relative depending on the side specified.
@@ -328,7 +398,7 @@ impl Orderbook {
     /// * [`OrderSide::Buy`] - highest price to lowest (for selling)
     /// * [`OrderSide::Sell`] - lowest price to highest (for buying)
     ///
-    pub fn iter_rel(&self, side: OrderSide) -> impl Iterator<Item = (OrderIndex, Order)> + '_ {
+    pub fn iter_rel(&self, side: OrderSide) -> impl Iterator<Item = (usize, &OrderData)> + '_ {
         enum Either<L, R> {
             Left(L),
             Right(R),
@@ -349,39 +419,9 @@ impl Orderbook {
             }
         }
 
-        fn wrap_iter<'a, I: Iterator<Item = &'a PriceLevel> + 'a>(
-            side: OrderSide,
-            iter: I,
-        ) -> impl Iterator<Item = (OrderIndex, Order)> + 'a {
-            iter.flat_map(move |level| {
-                level.iter().copied().map(move |o| {
-                    let order_index = OrderIndex {
-                        side,
-                        price: o.price,
-                        memo: o.memo,
-                    };
-                    (order_index, o)
-                })
-            })
-        }
-
         match side {
-            OrderSide::Buy => Either::Left(wrap_iter(side, self.bids.iter_inner_rev())),
-            OrderSide::Sell => Either::Right(wrap_iter(side, self.asks.iter_inner())),
+            OrderSide::Buy => Either::Left(self.bids.orders.iter().enumerate().rev()),
+            OrderSide::Sell => Either::Right(self.asks.orders.iter().enumerate()),
         }
-    }
-
-    /// get a mutable reference to an order in the orderbook, returns `None` if the order does not exist.
-    #[inline]
-    #[track_caller]
-    pub fn get_mut(&mut self, order_index: OrderIndex) -> Option<&mut Order> {
-        let OrderIndex { side, price, memo } = order_index;
-
-        let levels = match side {
-            OrderSide::Buy => &mut self.bids,
-            OrderSide::Sell => &mut self.asks,
-        };
-
-        levels.get_mut((price, memo))
     }
 }

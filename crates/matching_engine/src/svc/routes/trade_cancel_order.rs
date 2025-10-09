@@ -62,18 +62,15 @@ pub async fn f(
     Json(body): Json<TradeCancelOrder>,
 ) -> Result<Json<TradeCancelOrderResponse>, (StatusCode, &'static str)> {
     use crate::svc::ap_actor::Error as E;
-    use crate::svc::ap_actor::MessageOut as R;
+    use crate::svc::ap_actor::MsgOut as R;
 
-    // let Ok(resp) = engine
-    //     .cancel_order(OrderUuid(order_uuid.clone()), clerk.user_id())
-    //     .await
-    // else {
-    //     tracing::warn!("failed to cancel order, trade engine is suspended");
-    //     return Err((
-    //         StatusCode::INTERNAL_SERVER_ERROR,
-    //         "trading engine is suspended",
-    //     ));
-    // };
+    let Ok(resp) = engine.cancel_order(todo!(), clerk.user_id()).await else {
+        tracing::warn!("failed to cancel order, trade engine is suspended");
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "trading engine is suspended",
+        ));
+    };
 
     // let Ok((output, errors)) = resp.await else {
     //     tracing::warn!("wait_response did not return a result");

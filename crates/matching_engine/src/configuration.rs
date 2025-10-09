@@ -91,15 +91,13 @@ pub struct Configuration {
         )
     )]
     pub bitcoin_grpc_endpoint: tonic::transport::Endpoint,
-
-    /// Specifies the address to bind the trading engine socket to
+    /// the address to bind the webserver
     #[cfg_attr(feature = "serde", serde(default = "trading_address"))]
     pub trading_bind_address: SocketAddr,
 }
 
 impl Configuration {
-    /// A tuple of the user and password for bitcoin-rpc auth
-    pub fn from_env(vars: Vars) -> std::io::Result<Self> {
+    pub fn from_env_vars(vars: Vars) -> std::io::Result<Self> {
         todo!("parse vars")
     }
 }

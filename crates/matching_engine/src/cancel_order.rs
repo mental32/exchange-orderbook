@@ -1,6 +1,6 @@
 //! logic for canceling orders in the orderbook
 use super::order_uuid::OrderUuid;
-use crate::orderbook::Order;
+use crate::orderbook::OrderData;
 use crate::orderbook::OrderIndex;
 use common_core::web::middleware::clerk::ClerkUserId;
 
@@ -20,6 +20,6 @@ pub struct CancelOrder {
 pub fn do_cancel_order(
     orderbook: &mut crate::orderbook::Orderbook,
     co: CancelOrder,
-) -> Option<Order> {
+) -> Option<OrderData> {
     orderbook.remove(co.order_index)
 }

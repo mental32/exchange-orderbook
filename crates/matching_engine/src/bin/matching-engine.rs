@@ -1,6 +1,5 @@
 use anyhow::Context;
 use tracing::instrument::WithSubscriber;
-use tracing_subscriber::layer::SubscriberExt;
 
 fn main() -> anyhow::Result<()> {
     return tokio::runtime::Builder::new_multi_thread()
@@ -17,7 +16,7 @@ fn main() -> anyhow::Result<()> {
                 }
 
                 let config =
-                    matching_engine::configuration::Configuration::from_env(std::env::vars())
+                    matching_engine::configuration::Configuration::from_env_vars(std::env::vars())
                         .context("failed loading configuration")?;
 
                 tracing::info!(?config, "loaded configuration");
@@ -29,7 +28,7 @@ fn main() -> anyhow::Result<()> {
                     .await
                     .context("could not connect to postgres")?;
 
-                let bitcoind_svc =
+                let _bitcoind_svc =
                     bitcoind_grpc::connect_bitcoin_rpc(config.bitcoin_grpc_endpoint.clone())
                         .await?;
 

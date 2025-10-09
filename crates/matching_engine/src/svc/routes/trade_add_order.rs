@@ -4,12 +4,14 @@ use crate::decimal::NonZeroDecimal;
 use crate::order_uuid::OrderUuid;
 use crate::orderbook::OrderSide;
 use crate::orderbook::OrderType;
-use crate::place_order::PlaceOrderDetails;
-use crate::place_order::PlaceOrderResult;
-use crate::self_trade_protection::SelfTradeProtection;
-use crate::svc::ap_actor::MessageOut;
+use crate::orderbook::SelfTradeProtection;
+use crate::orderbook::TimeInForce;
+use crate::orderflags::OrderFlags;
+use crate::place_order::OrderDetails;
+use crate::place_order::PlaceOrderOk;
+use crate::price::Price;
+use crate::svc::ap_actor::MsgOut;
 use crate::svc::engine::EngineFacade;
-use crate::timeinforce::TimeInForce;
 use axum::Extension;
 use axum::extract::Json;
 use axum::extract::Path;
@@ -55,8 +57,8 @@ pub struct TradeAddOrder {
     ///         from which the direction will be automatic based on if the original order is a buy
     ///         or sell (no need to use `-` or `#`).
     ///         The `%` suffix also works for these order types to use a relative percentage price.
-    #[cfg_attr(feature = "serde", serde(with = "rust_decimal::serde::str"))]
-    pub price: Decimal,
+    #[cfg_attr(feature = "serde", serde(with = "crate::price"))]
+    pub price: Price,
     /// Secondary Price:
     ///     -   Limit price for `stop-loss-limit`, `take-profit-limit`, and `trailing-stop-limit` orders
     /// Note:
@@ -64,9 +66,9 @@ pub struct TradeAddOrder {
     ///         prefixes. This will provide the offset from the trigger price to the limit price, i.e. +0
     ///         would set the limit price equal to the trigger price. The `%` suffix also works for this field
     ///         to use a relative percentage limit price.
-    #[cfg_attr(feature = "serde", serde(with = "rust_decimal::serde::str"))]
+    #[cfg_attr(feature = "serde", serde(with = "crate::price"))]
     #[cfg_attr(feature = "serde", serde(rename = "price2"))]
-    pub secondary_price: Decimal,
+    pub secondary_price: Price,
     /// The conditional parameters are used as a template for generating the secondary close orders when the primary
     /// order fills. Each fill on the primary order will generate a new secondary order. The size of the secondary
     /// order will be the same size as the executed quantity and have the opposite side.
@@ -98,19 +100,30 @@ pub struct TradeAddOrder {
     ///     -   To keep triggers servicable, the last price will be used as a fallback reference during connectivity issues with external index feeds.
     // #[cfg_attr(feature = "serde", serde(default))]
     pub trigger: PriceTrigger,
+    /// Comma delimited list of order flags
+    /// - `post` post-only order (available when ordertype = limit)
+    /// - `fcib` prefer fee in base currency (default if selling)
+    /// - `fciq` prefer fee in quote currency (default if buying, mutually exclusive with `fcib`)
+    /// - `nompp` (DEPRECATED) -- disabling Market Price Protection for market orders is no longer supported. If supplied, the flag is accepted but ignored.
+    /// - `viqc` order volume expressed in quote currency. This option is supported only for buy market orders. Also not available on margin orders.
+    #[cfg_attr(
+        feature = "serde",
+        serde(with = "crate::orderflags", rename = "oflags")
+    )]
+    pub order_flags: OrderFlags,
 }
 
-impl PlaceOrderDetails for TradeAddOrder {
+impl OrderDetails for TradeAddOrder {
     fn order_side(&self) -> OrderSide {
         self.side
     }
 
-    fn quantity(&self) -> Option<crate::decimal::NonZeroDecimal> {
+    fn quantity(&self) -> Option<NonZeroDecimal> {
         NonZeroDecimal::new(self.quantity).ok()
     }
 
-    fn price(&self) -> Option<crate::decimal::NonZeroDecimal> {
-        NonZeroDecimal::new(self.price).ok()
+    fn price(&self) -> Price {
+        self.price
     }
 
     fn order_type(&self) -> OrderType {
@@ -119,6 +132,18 @@ impl PlaceOrderDetails for TradeAddOrder {
 
     fn time_in_force(&self) -> TimeInForce {
         self.time_in_force
+    }
+
+    fn stp(&self) -> SelfTradeProtection {
+        self.stp
+    }
+
+    fn display_quantity(&self) -> Option<NonZeroDecimal> {
+        NonZeroDecimal::new(self.display_quantity).ok()
+    }
+
+    fn order_flags(&self) -> OrderFlags {
+        self.order_flags
     }
 }
 

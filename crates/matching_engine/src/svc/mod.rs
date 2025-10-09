@@ -10,6 +10,7 @@ use futures::stream::FuturesUnordered;
 use itertools::Itertools as _;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::sync::oneshot;
 use tracing::Instrument;
 
 pub(crate) mod ap_actor;
@@ -20,15 +21,17 @@ fn launch_ap_procs(
     asset_pairs: &[AssetPairRow],
     pg_pool: sqlx::PgPool,
     symbol_vocabulary: SymbolVocabulary,
+    channel_buffer_size: usize,
 ) -> Vec<(
     BaseQuote,
+    String, /* BaseQuote rendered */
     tokio::sync::mpsc::Sender<ap_actor::Envelope>,
     tokio::task::JoinHandle<()>,
 )> {
     asset_pairs
         .iter()
         .map(|ap_row| {
-            let (snd, rcv) = tokio::sync::mpsc::channel(1);
+            let (snd, rcv) = tokio::sync::mpsc::channel(channel_buffer_size);
             let base_quote = ap_row
                 .base_quote(&symbol_vocabulary)
                 .expect("base or quote was not in symbol vocabulary");
@@ -44,7 +47,12 @@ fn launch_ap_procs(
                     asset_pair = ap_row.id
                 )),
             );
-            (base_quote, snd, handle)
+            let base_quote_st = format!(
+                "{base}/{quote}",
+                base = ap_row.base_asset,
+                quote = ap_row.quote_asset
+            );
+            (base_quote, base_quote_st, snd, handle)
         })
         .collect()
 }
@@ -54,40 +62,54 @@ fn launch_ap_procs(
 pub async fn serve(
     pg_pool: sqlx::PgPool,
     bind_socket_addr: SocketAddr,
-    signal: impl Future<Output = ()> + Send + 'static,
+    graceful_shutdown_signal: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let mut handles = vec![];
 
+    let tcp_listener = tokio::net::TcpListener::bind(&bind_socket_addr).await?;
+
     // spawn an actor for each active asset pair
-    let ap_rows = sqlx::query_as!(
+    let asset_pairs = sqlx::query_as!(
         AssetPairRow,
         "SELECT * FROM t_trading_asset_pairs WHERE status = 'active'",
     )
     .fetch_all(&pg_pool)
     .await
     .context("error fetching active asset pairs")?;
-    let symbol_vocabulary = ap_rows
+    let symbol_vocabulary = asset_pairs
         .iter()
-        .map(|row| [row.base_asset.clone(), row.quote_asset.clone()])
+        .map(|r| [r.base_asset.clone(), r.quote_asset.clone()])
         .flatten()
         .unique()
         .collect::<SymbolVocabulary>();
 
     let mut arc_state: Arc<engine::SvcState> = Arc::new(engine::SvcState {
         asset_processors: Default::default(),
-        order_uuids: Default::default(),
         websocket_sessions: Default::default(),
         symbol_vocabulary,
     });
 
     let mut_ref_state = Arc::get_mut(&mut arc_state).expect("no other references to state");
 
-    for (base_quote, tx, handle) in launch_ap_procs(
-        &ap_rows,
+    let channel_buffer_size = option_env!("AP_CHANNEL_BUFFER_SIZE")
+        .and_then(|st| {
+            st.parse()
+                .inspect_err(|err| {
+                    tracing::error!(?err, "The environment variable AP_CHANNEL_BUFFER_SIZE could not be parsed to a number (usize)");
+                })
+                .ok()
+        })
+        .unwrap_or(1);
+
+    for (base_quote, base_quote_st, tx, handle) in launch_ap_procs(
+        &asset_pairs,
         pg_pool.clone(),
         mut_ref_state.symbol_vocabulary.clone(),
+        channel_buffer_size,
     ) {
-        mut_ref_state.asset_processors.push((base_quote, tx));
+        mut_ref_state
+            .asset_processors
+            .push((base_quote, base_quote_st, tx));
         handles.push(handle);
     }
 
@@ -102,16 +124,16 @@ pub async fn serve(
                     tracing::info!(?row.id, "processing trading event source row");
                     let Ok((base_quote, msg_in)) = serde_json::from_value::<(
                         (AssetCode, AssetCode),
-                        ap_actor::MessageIn,
+                        ap_actor::MsgIn,
                     )>(row.jstr) else {
                         tracing::error!(?row.id, "error deserializing trading event source row");
                         continue;
                     };
 
-                    let Some((_, tx)) = mut_ref_state
+                    let Some((_, _, snd)) = mut_ref_state
                         .asset_processors
                         .iter()
-                        .find(|(ap, _)| *ap == base_quote)
+                        .find(|(ap, _, _)| *ap == base_quote)
                         .cloned()
                     else {
                         tracing::error!(
@@ -121,9 +143,9 @@ pub async fn serve(
                         continue;
                     };
 
-                    let (snd, rcv) = tokio::sync::oneshot::channel();
-                    let envelope = (snd, vec![msg_in]);
-                    if let Err(err) = tx.send(envelope).await {
+                    let (msg_snd, msg_rcv) = oneshot::channel();
+                    let envelope = (msg_snd, msg_in);
+                    if let Err(err) = snd.send(envelope).await {
                         tracing::error!(
                             ?err,
                             "error sending message from trading event source row to asset pair actor"
@@ -131,7 +153,7 @@ pub async fn serve(
                         continue;
                     }
 
-                    let msg_out = rcv
+                    let msg_out = msg_rcv
                         .await
                         .expect("recv-error from asset pair actor")
                         .expect("switch message failure");
@@ -151,9 +173,9 @@ pub async fn serve(
         inner: arc_state,
     }));
 
-    let tcp_listener = tokio::net::TcpListener::bind(&bind_socket_addr).await?;
     let make_service = router.into_make_service_with_connect_info::<SocketAddr>();
-    let app = axum::serve(tcp_listener, make_service).with_graceful_shutdown(signal);
+    let app =
+        axum::serve(tcp_listener, make_service).with_graceful_shutdown(graceful_shutdown_signal);
     tracing::info!(?bind_socket_addr, "serving http router for trading");
 
     let res = app.await;
@@ -162,16 +184,16 @@ pub async fn serve(
     {
         let futs = ap_list
             .iter()
-            .map(|(_, tx)| {
-                let (snd, rcv) = tokio::sync::oneshot::channel();
-                let envelope = (snd, vec![ap_actor::MessageIn::Shutdown]);
+            .map(|(_, _, snd)| {
+                let (msg_snd, msg_rcv) = oneshot::channel();
+                let envelope = (msg_snd, ap_actor::MsgIn::Shutdown);
 
                 async move {
-                    if let Err(err) = tx.send(envelope).await {
+                    if let Err(err) = snd.send(envelope).await {
                         tracing::error!(?err, "error sending shutdown message to asset pair actor");
                     }
 
-                    if let Err(err) = rcv.await {
+                    if let Err(err) = msg_rcv.await {
                         tracing::error!(
                             ?err,
                             "error receiving shutdown response from asset pair actor"

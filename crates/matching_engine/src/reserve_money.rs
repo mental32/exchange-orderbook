@@ -53,14 +53,14 @@ impl ReserveMoney {
     pub fn defer_revert(
         self,
         handle: tokio::runtime::Handle,
-        db: sqlx::PgPool,
+        pg_pool: sqlx::PgPool,
     ) -> DeferGuard<impl FnMut()> {
         defer(move || {
             let this = self.clone();
-            let db = db.clone();
+            let pg_pool = pg_pool.clone();
 
             handle.spawn(async move {
-                let fut = this.revert(&db);
+                let fut = this.revert(&pg_pool);
 
                 if let Err(err) = fut.await {
                     tracing::warn!(?err, "failed to revert reserved funds");
@@ -72,7 +72,7 @@ impl ReserveMoney {
     /// Manually revert this fund reservation by creating an inverse transaction
     pub fn revert(
         self,
-        db: &sqlx::PgPool,
+        pg_pool: &sqlx::PgPool,
     ) -> impl std::future::Future<Output = Result<i32, sqlx::Error>> + '_ {
         sqlx::query!(
             r#"
@@ -90,7 +90,7 @@ impl ReserveMoney {
             "#,
             self.row_id as i32
         )
-        .fetch_one(db)
+        .fetch_one(pg_pool)
         .map_ok(|rec| rec.id)
     }
 }
@@ -123,7 +123,7 @@ pub enum ReserveByAssetError {
 pub async fn reserve_by_asset(
     pg_pool: sqlx::PgPool,
     user_id: ClerkUserId,
-    quantity: Money38_18,
+    Money38_18(quantity): Money38_18,
     currency: AssetCode,
     symbol_vocabulary: &SymbolVocabulary,
 ) -> Result<ReserveMoney, ReserveByAssetError> {
@@ -147,7 +147,7 @@ pub async fn reserve_by_asset(
             'reserve asset'
         ) RETURNING id
         "#,
-        quantity.0,
+        quantity,
         user_id.0,
         currency.as_str(symbol_vocabulary),
     )
