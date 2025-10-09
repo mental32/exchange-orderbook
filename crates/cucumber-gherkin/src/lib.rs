@@ -8,6 +8,7 @@
 //!
 //! [cucumber-rs]: https://github.com/cucumber-rs/cucumber
 //!
+#![allow(warnings)]
 pub mod events;
 pub mod gherkin;
 pub mod parallel;

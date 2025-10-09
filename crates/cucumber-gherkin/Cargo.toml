@@ -5,8 +5,8 @@ edition = "2024"
 
 [dependencies]
 ariadne = { version = "0.5.1", features = ["auto-color"] }
-chumsky = "0.11.1"
 clap.workspace = true
+chumsky.workspace = true
 crossbeam = "0.8"
 num_cpus = "1.16.0"
 rayon = "1.11.0"
