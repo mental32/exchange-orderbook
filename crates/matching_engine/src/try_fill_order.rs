@@ -8,7 +8,7 @@ use crate::decimal::NonZeroDecimal;
 use crate::orderbook::OrderIndex;
 use crate::orderbook::SelfTradeProtection;
 use crate::pending_fill::Fill;
-use crate::place_order::OrderDetails;
+use crate::pending_fill::OrderDetails;
 use common_core::web::middleware::clerk::ClerkUserId;
 use std::convert::Infallible;
 
@@ -31,7 +31,7 @@ where
     D: OrderDetails,
 {
     let mut fills = vec![];
-    let mut taker_fill_outcome = FillType::NotFilled;
+    let mut taker_fill_outcome = None;
     let mut taker_filled_qty = crate::decimal::Decimal::ZERO;
 
     let taker_side = details.order_side();
@@ -41,21 +41,45 @@ where
         OrderSide::Sell => OrderSide::Buy,
     };
 
-    for (usize, resting_order) in orderbook.iter_rel(maker_side) {
-        if details.order_type() == OrderType::Limit
-            && ((taker_side == OrderSide::Buy && resting_order.price > taker_price)
-                || (taker_side == OrderSide::Sell && resting_order.price < taker_price))
-        {
-            continue; // Skip orders that don't meet the price condition for limit orders
-        }
+    enum Either<L, R> {
+        Left(L),
+        Right(R),
+    }
 
+    impl<L, R> Iterator for Either<L, R>
+    where
+        L: Iterator,
+        R: Iterator<Item = L::Item>,
+    {
+        type Item = L::Item;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            match self {
+                Either::Left(l) => l.next(),
+                Either::Right(r) => r.next(),
+            }
+        }
+    }
+
+    let it = if details.order_type() == OrderType::Limit {
+        Either::Left(orderbook.iter_rel(maker_side, taker_price))
+    } else {
+        assert_eq!(details.order_type(), OrderType::Market);
+        Either::Right(match maker_side {
+            OrderSide::Buy => orderbook.bids(),
+            OrderSide::Sell => orderbook.asks(),
+        })
+    };
+
+    for (ix, resting_order) in it {
         // Self-Trade Protection: skip own orders based on STP settings
         if let (Some(taker_id), Some(resting_id)) = (taker_user_id, Some(&resting_order.user_id)) {
             if taker_id == resting_id {
                 match details.stp() {
                     SelfTradeProtection::CancelNewest => {
-                        // Skip the resting order (don't trade with own order)
-                        continue;
+                        // Cancel the taker order by setting outcome to Cancelled
+                        taker_fill_outcome = Some(FillType::Cancelled);
+                        break;
                     }
                     SelfTradeProtection::CancelOldest => {
                         // Add cancellation fill for the resting order
@@ -82,7 +106,7 @@ where
                             fill_type: FillType::Cancelled,
                         });
                         // Cancel the taker order by setting outcome to Cancelled
-                        taker_fill_outcome = FillType::Cancelled;
+                        taker_fill_outcome = Some(FillType::Cancelled);
                         // Stop processing - both orders are cancelled, no trade should execute
                         break;
                     }
@@ -100,34 +124,38 @@ where
             .unwrap_or(resting_order.remaining_quantity);
 
         let fill_type = match taker_remaining_qty.cmp(&*visible_quantity) {
-            std::cmp::Ordering::Greater | std::cmp::Ordering::Equal => FillType::Complete,
+            std::cmp::Ordering::Greater | std::cmp::Ordering::Equal => FillType::Complete {
+                quantity: visible_quantity,
+            },
             std::cmp::Ordering::Less => FillType::Partial {
                 amount_filled: NonZeroDecimal::new(taker_remaining_qty)
                     .expect("taker_remaining_qty should be non-zero"),
             },
         };
 
-        let oix = OrderIndex {
+        let order_index = OrderIndex {
             side: maker_side,
             price: resting_order.price,
             timestamp: resting_order.timestamp,
         };
 
         fills.push(Fill {
-            order_index: oix,
+            order_index,
             fill_type,
         });
 
         // Update taker filled quantity based on what was filled
         match fill_type {
-            FillType::Complete => {
+            FillType::Complete { quantity } => {
                 // Resting order's visible portion was completely filled
-                taker_filled_qty += *visible_quantity;
+                taker_filled_qty += *quantity;
             }
             FillType::Partial { amount_filled } => {
                 // Resting order was partially filled, which means taker is now complete
                 taker_filled_qty += *amount_filled;
-                taker_fill_outcome = FillType::Complete;
+                taker_fill_outcome = Some(FillType::Complete {
+                    quantity: taker_filled_qty.into(),
+                });
                 break;
             }
             FillType::Cancelled => {
@@ -137,17 +165,19 @@ where
                     "cancelled fills should not be processed in taker quantity calculation"
                 );
             }
-            FillType::NotFilled => unreachable!("should not push NotFilled fills"),
         }
 
         // After adding this order's quantity, update taker's status
         if taker_filled_qty == *taker_quantity {
-            taker_fill_outcome = FillType::Complete;
+            taker_fill_outcome = Some(FillType::Complete {
+                quantity: taker_filled_qty.into(),
+            });
+            break;
         } else {
-            taker_fill_outcome = FillType::Partial {
+            taker_fill_outcome = Some(FillType::Partial {
                 amount_filled: NonZeroDecimal::new(taker_filled_qty)
                     .expect("taker_filled_qty should be non-zero at this point"),
-            };
+            });
         }
     }
 
@@ -169,6 +199,7 @@ mod tests {
     use super::*;
     use crate::decimal::Decimal;
     use crate::decimal::NonZeroDecimal;
+    use crate::decimal::dec;
     use crate::order_uuid::OrderUuid;
     use crate::orderbook::OrderSide;
     use crate::orderbook::OrderType;
@@ -177,7 +208,7 @@ mod tests {
     use crate::orderbook::TimeInForce;
     use crate::orderflags::OrderFlags;
     use crate::pending_fill::FillType;
-    use crate::place_order::OrderDetails;
+    use crate::pending_fill::OrderDetails;
     use crate::price::Price;
     use std::str::FromStr;
 
@@ -230,11 +261,10 @@ mod tests {
         fn order_flags(&self) -> crate::orderflags::OrderFlags {
             OrderFlags::default()
         }
-    }
 
-    // Helper to create decimal from string
-    fn dec(s: &str) -> Decimal {
-        Decimal::from_str(s).unwrap()
+        fn userref(&self) -> Option<u32> {
+            None
+        }
     }
 
     #[test]
@@ -269,13 +299,23 @@ mod tests {
         };
 
         let result = try_fill_orders(&mut orderbook, &taker, taker.price.into(), None).unwrap();
-        assert_eq!(result.taker_fill_outcome, FillType::Complete);
+        assert_eq!(
+            result.taker_fill_outcome,
+            Some(FillType::Complete {
+                quantity: crate::decimal::dec!(50).into()
+            })
+        );
         assert_eq!(result.fills.len(), 1);
-        assert_eq!(result.fills[0].fill_type, FillType::Complete);
+        assert_eq!(
+            result.fills[0].fill_type,
+            FillType::Complete {
+                quantity: crate::decimal::dec!(50).into()
+            }
+        );
     }
 
     #[test]
-    fn test_stp_cancel_newest_skips_self_trade() {
+    fn test_stp_cancel_newest_cancels_taker() {
         let mut orderbook = Orderbook::new_empty();
 
         // Add resting sell orders: one from same user, one from different user
@@ -335,12 +375,9 @@ mod tests {
 
         let pending_fill = result.unwrap();
         // Should only have 1 fill (with user_b's order), not 2
-        assert_eq!(pending_fill.fills.len(), 1);
+        assert_eq!(pending_fill.fills.len(), 0);
         // Taker should be partially filled (30 out of 40)
-        assert!(matches!(
-            pending_fill.taker_fill_outcome,
-            FillType::Partial { .. }
-        ));
+        assert_eq!(pending_fill.taker_fill_outcome, Some(FillType::Cancelled));
     }
 
     #[test]
@@ -409,7 +446,7 @@ mod tests {
         // Taker should be partially filled (30 out of 40)
         assert!(matches!(
             pending_fill.taker_fill_outcome,
-            FillType::Partial { .. }
+            Some(FillType::Partial { .. })
         ));
 
         // Verify we have both a cancellation and a complete fill
@@ -421,7 +458,7 @@ mod tests {
         let complete_fill_count = pending_fill
             .fills
             .iter()
-            .filter(|f| matches!(f.fill_type, FillType::Complete))
+            .filter(|f| matches!(f.fill_type, FillType::Complete { .. }))
             .count();
 
         assert_eq!(cancellation_count, 1, "Should have 1 cancellation fill");
@@ -431,11 +468,11 @@ mod tests {
         let complete_fill = pending_fill
             .fills
             .iter()
-            .find(|f| matches!(f.fill_type, FillType::Complete))
+            .find(|f| matches!(f.fill_type, FillType::Complete { .. }))
             .expect("Should have a complete fill");
         assert_eq!(
             complete_fill.order_index.price,
-            NonZeroDecimal::new(dec("101")).unwrap()
+            NonZeroDecimal::new(dec!(101)).unwrap()
         );
     }
 
@@ -506,7 +543,7 @@ mod tests {
         // Taker should be cancelled due to self-trade
         assert!(matches!(
             pending_fill.taker_fill_outcome,
-            FillType::Cancelled
+            Some(FillType::Cancelled)
         ));
 
         // Verify we have only a cancellation fill
@@ -518,7 +555,7 @@ mod tests {
         let complete_fill_count = pending_fill
             .fills
             .iter()
-            .filter(|f| matches!(f.fill_type, FillType::Complete))
+            .filter(|f| matches!(f.fill_type, FillType::Complete { .. }))
             .count();
 
         assert_eq!(cancellation_count, 1, "Should have 1 cancellation fill");
@@ -532,7 +569,7 @@ mod tests {
             .expect("Should have a cancellation fill");
         assert_eq!(
             cancellation_fill.order_index.price,
-            NonZeroDecimal::new(dec("100")).unwrap()
+            NonZeroDecimal::new(dec!(100)).unwrap()
         );
     }
 
@@ -631,31 +668,46 @@ mod tests {
         assert_eq!(pending_fill.fills.len(), 3);
 
         // Taker should be fully filled
-        assert_eq!(pending_fill.taker_fill_outcome, FillType::Complete);
+        assert_eq!(
+            pending_fill.taker_fill_outcome,
+            Some(FillType::Complete {
+                quantity: crate::decimal::dec!(3.0).into()
+            })
+        );
 
         // Verify fill order and prices (best price first)
         // Fill 1: 1.0 BTC @ $50k (complete)
         assert_eq!(
             pending_fill.fills[0].order_index.price,
-            NonZeroDecimal::new(dec("50000")).unwrap()
+            NonZeroDecimal::new(dec!(50000)).unwrap()
         );
-        assert_eq!(pending_fill.fills[0].fill_type, FillType::Complete);
+        assert_eq!(
+            pending_fill.fills[0].fill_type,
+            FillType::Complete {
+                quantity: crate::decimal::dec!(1.0).into()
+            }
+        );
 
         // Fill 2: 1.5 BTC @ $51k (complete)
         assert_eq!(
             pending_fill.fills[1].order_index.price,
-            NonZeroDecimal::new(dec("51000")).unwrap()
+            NonZeroDecimal::new(dec!(51000)).unwrap()
         );
-        assert_eq!(pending_fill.fills[1].fill_type, FillType::Complete);
+        assert_eq!(
+            pending_fill.fills[1].fill_type,
+            FillType::Complete {
+                quantity: crate::decimal::dec!(1.5).into()
+            }
+        );
 
         // Fill 3: 0.5 BTC @ $52k (partial - only need 0.5 to reach 3.0 total)
         assert_eq!(
             pending_fill.fills[2].order_index.price,
-            NonZeroDecimal::new(dec("52000")).unwrap()
+            NonZeroDecimal::new(dec!(52000)).unwrap()
         );
         assert!(matches!(
             pending_fill.fills[2].fill_type,
-            FillType::Partial { amount_filled } if *amount_filled == dec("0.5")
+            FillType::Partial { amount_filled } if *amount_filled == dec!(0.5)
         ));
 
         // Total cost calculation (for buy-side reservation logic):
@@ -711,7 +763,104 @@ mod tests {
         // Taker should be PARTIALLY filled (only got 1.0 out of 5.0)
         assert!(matches!(
             pending_fill.taker_fill_outcome,
-            FillType::Partial { amount_filled } if *amount_filled == dec("1.0")
+            Some(FillType::Partial { amount_filled }) if *amount_filled == dec!(1.0)
         ));
+    }
+
+    #[test]
+    fn test_taker_complete_stops_matching() {
+        let mut orderbook = Orderbook::new_empty();
+
+        // Setup: Two sell orders, taker will be completely filled by first one
+        let seller_1 = common_core::web::middleware::clerk::ClerkUserId("seller_1".to_string());
+        let seller_2 = common_core::web::middleware::clerk::ClerkUserId("seller_2".to_string());
+
+        // Resting order 1: 50 BTC @ $100 (best price)
+        {
+            let price = Decimal::from_str("100").unwrap();
+            let quantity = Decimal::from_str("50").unwrap();
+            let order_id = OrderUuid(uuid::Uuid::new_v4());
+            let order = TestOrder {
+                side: OrderSide::Sell,
+                order_type: OrderType::Limit,
+                price,
+                quantity,
+                time_in_force: TimeInForce::GoodTilCanceled,
+                stp: SelfTradeProtection::CancelNewest,
+                display_quantity: None,
+            };
+            orderbook.insert(
+                NonZeroDecimal::new(price).unwrap(),
+                order_id,
+                seller_1.clone(),
+                order,
+            );
+        }
+
+        // Resting order 2: 50 BTC @ $101 (worse price, should NOT be matched)
+        {
+            let price = Decimal::from_str("101").unwrap();
+            let quantity = Decimal::from_str("50").unwrap();
+            let order_id = OrderUuid(uuid::Uuid::new_v4());
+            let order = TestOrder {
+                side: OrderSide::Sell,
+                order_type: OrderType::Limit,
+                price,
+                quantity,
+                time_in_force: TimeInForce::GoodTilCanceled,
+                stp: SelfTradeProtection::CancelNewest,
+                display_quantity: None,
+            };
+            orderbook.insert(
+                NonZeroDecimal::new(price).unwrap(),
+                order_id,
+                seller_2.clone(),
+                order,
+            );
+        }
+
+        // Taker: Buy 50 BTC @ $101 (willing to pay up to $101)
+        let taker = TestOrder {
+            side: OrderSide::Buy,
+            order_type: OrderType::Limit,
+            price: Decimal::from_str("101").unwrap(),
+            quantity: Decimal::from_str("50").unwrap(), // Exactly matches first order
+            time_in_force: TimeInForce::GoodTilCanceled,
+            stp: SelfTradeProtection::CancelNewest,
+            display_quantity: None,
+        };
+
+        // CORRECT BEHAVIOR: Should stop matching after taker is completely filled
+        let result = try_fill_orders(&mut orderbook, &taker, taker.price.into(), None);
+        assert!(result.is_ok());
+
+        let pending_fill = result.unwrap();
+
+        // Should only match with first order (50 BTC @ $100)
+        assert_eq!(
+            pending_fill.fills.len(),
+            1,
+            "Should stop after taker is complete"
+        );
+
+        // Taker should be completely filled
+        assert_eq!(
+            pending_fill.taker_fill_outcome,
+            Some(FillType::Complete {
+                quantity: crate::decimal::dec!(50).into()
+            })
+        );
+
+        // The single fill should be at $100 (first order)
+        assert_eq!(
+            pending_fill.fills[0].order_index.price,
+            NonZeroDecimal::new(dec!(100)).unwrap()
+        );
+        assert_eq!(
+            pending_fill.fills[0].fill_type,
+            FillType::Complete {
+                quantity: crate::decimal::dec!(50).into()
+            }
+        );
     }
 }

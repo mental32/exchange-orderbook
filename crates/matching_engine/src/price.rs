@@ -5,7 +5,7 @@ use crate::orderbook::OrderType;
 use std::fmt;
 use std::str::FromStr;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PricePrefix {
     /// relative "adds the amount to"
     Plus,
@@ -15,7 +15,7 @@ pub enum PricePrefix {
     Hash,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Price {
     pub prefix: Option<PricePrefix>,
     pub amount: Decimal,
@@ -65,7 +65,7 @@ impl FromStr for Price {
 pub struct InvalidPrice;
 
 impl Price {
-    pub fn resolve_to_absolute(
+    pub fn compute_to_decimal(
         &self,
         last_traded_price: NonZeroDecimal,
         order_side: OrderSide,
@@ -225,6 +225,53 @@ where
     Price::from_str(&st).map_err(|_| serde::de::Error::custom("Invalid price format"))
 }
 
+#[cfg(feature = "serde")]
+pub fn deserialize_price_option<'de, D>(deserializer: D) -> Result<Option<Price>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct PriceVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for PriceVisitor {
+        type Value = Option<Price>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a price string or null")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            match value.parse() {
+                Ok(price) => Ok(Some(price)),
+                Err(()) => Err(E::custom("Invalid price format")),
+            }
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+    }
+
+    deserializer.deserialize_any(PriceVisitor)
+}
+
+#[cfg(feature = "serde")]
+pub fn serialize_price_option<S>(value: &Option<Price>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match value {
+        Some(price) => crate::price::serialize(price, serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::decimal::NonZeroDecimal;
@@ -289,7 +336,7 @@ mod test {
         };
         let last_price = NonZeroDecimal::new("48000".parse().unwrap()).unwrap();
         let result = price
-            .resolve_to_absolute(last_price, OrderSide::Buy, OrderType::Limit)
+            .compute_to_decimal(last_price, OrderSide::Buy, OrderType::Limit)
             .unwrap();
         assert_eq!(*result, "50000".parse().unwrap());
     }
@@ -304,7 +351,7 @@ mod test {
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
         let result = price
-            .resolve_to_absolute(last_price, OrderSide::Buy, OrderType::Limit)
+            .compute_to_decimal(last_price, OrderSide::Buy, OrderType::Limit)
             .unwrap();
         assert_eq!(*result, "51000".parse().unwrap());
     }
@@ -319,7 +366,7 @@ mod test {
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
         let result = price
-            .resolve_to_absolute(last_price, OrderSide::Buy, OrderType::Limit)
+            .compute_to_decimal(last_price, OrderSide::Buy, OrderType::Limit)
             .unwrap();
         assert_eq!(*result, "49000".parse().unwrap());
     }
@@ -335,7 +382,7 @@ mod test {
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
         let result = price
-            .resolve_to_absolute(last_price, OrderSide::Buy, OrderType::Limit)
+            .compute_to_decimal(last_price, OrderSide::Buy, OrderType::Limit)
             .unwrap();
         assert_eq!(*result, "52500".parse().unwrap());
     }
@@ -351,7 +398,7 @@ mod test {
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
         let result = price
-            .resolve_to_absolute(last_price, OrderSide::Buy, OrderType::Limit)
+            .compute_to_decimal(last_price, OrderSide::Buy, OrderType::Limit)
             .unwrap();
         assert_eq!(*result, "45000".parse().unwrap());
     }
@@ -366,7 +413,7 @@ mod test {
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
         let result = price
-            .resolve_to_absolute(last_price, OrderSide::Buy, OrderType::Limit)
+            .compute_to_decimal(last_price, OrderSide::Buy, OrderType::Limit)
             .unwrap();
         assert_eq!(*result, "51000".parse().unwrap());
     }
@@ -381,7 +428,7 @@ mod test {
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
         let result = price
-            .resolve_to_absolute(last_price, OrderSide::Sell, OrderType::Limit)
+            .compute_to_decimal(last_price, OrderSide::Sell, OrderType::Limit)
             .unwrap();
         assert_eq!(*result, "49000".parse().unwrap());
     }
@@ -397,7 +444,7 @@ mod test {
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
         let result = price
-            .resolve_to_absolute(last_price, OrderSide::Buy, OrderType::Limit)
+            .compute_to_decimal(last_price, OrderSide::Buy, OrderType::Limit)
             .unwrap();
         assert_eq!(*result, "51000".parse().unwrap());
     }
@@ -413,7 +460,7 @@ mod test {
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
         let result = price
-            .resolve_to_absolute(last_price, OrderSide::Sell, OrderType::Limit)
+            .compute_to_decimal(last_price, OrderSide::Sell, OrderType::Limit)
             .unwrap();
         assert_eq!(*result, "49000".parse().unwrap());
     }
@@ -428,7 +475,7 @@ mod test {
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
         let result = price
-            .resolve_to_absolute(last_price, OrderSide::Buy, OrderType::StopLoss)
+            .compute_to_decimal(last_price, OrderSide::Buy, OrderType::StopLoss)
             .unwrap();
         assert_eq!(*result, "50500".parse().unwrap());
     }
@@ -443,7 +490,7 @@ mod test {
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
         let result = price
-            .resolve_to_absolute(last_price, OrderSide::Sell, OrderType::StopLoss)
+            .compute_to_decimal(last_price, OrderSide::Sell, OrderType::StopLoss)
             .unwrap();
         assert_eq!(*result, "49500".parse().unwrap());
     }
@@ -458,7 +505,7 @@ mod test {
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
         let result = price
-            .resolve_to_absolute(last_price, OrderSide::Buy, OrderType::TakeProfit)
+            .compute_to_decimal(last_price, OrderSide::Buy, OrderType::TakeProfit)
             .unwrap();
         assert_eq!(*result, "49500".parse().unwrap()); // Note: SUBTRACTED, not added
     }
@@ -473,7 +520,7 @@ mod test {
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
         let result = price
-            .resolve_to_absolute(last_price, OrderSide::Sell, OrderType::TakeProfit)
+            .compute_to_decimal(last_price, OrderSide::Sell, OrderType::TakeProfit)
             .unwrap();
         assert_eq!(*result, "50500".parse().unwrap()); // Note: ADDED, not subtracted
     }
@@ -488,7 +535,7 @@ mod test {
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
         let result = price
-            .resolve_to_absolute(last_price, OrderSide::Buy, OrderType::TakeProfitLimit)
+            .compute_to_decimal(last_price, OrderSide::Buy, OrderType::TakeProfitLimit)
             .unwrap();
         assert_eq!(*result, "49500".parse().unwrap()); // 50000 - 500
     }
@@ -503,7 +550,7 @@ mod test {
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
         let result = price
-            .resolve_to_absolute(last_price, OrderSide::Sell, OrderType::TakeProfitLimit)
+            .compute_to_decimal(last_price, OrderSide::Sell, OrderType::TakeProfitLimit)
             .unwrap();
         assert_eq!(*result, "50500".parse().unwrap()); // 50000 + 500
     }
@@ -518,7 +565,7 @@ mod test {
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
         let result = price
-            .resolve_to_absolute(last_price, OrderSide::Buy, OrderType::Iceberg)
+            .compute_to_decimal(last_price, OrderSide::Buy, OrderType::Iceberg)
             .unwrap();
         assert_eq!(*result, "50100".parse().unwrap());
     }
@@ -532,7 +579,7 @@ mod test {
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
         let result = price
-            .resolve_to_absolute(last_price, OrderSide::Buy, OrderType::TrailingStop)
+            .compute_to_decimal(last_price, OrderSide::Buy, OrderType::TrailingStop)
             .unwrap();
         assert_eq!(*result, "50200".parse().unwrap());
     }
@@ -546,7 +593,7 @@ mod test {
             is_percentage: false,
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
-        let result = price.resolve_to_absolute(last_price, OrderSide::Buy, OrderType::Market);
+        let result = price.compute_to_decimal(last_price, OrderSide::Buy, OrderType::Market);
         assert!(result.is_err(), "Market order with # prefix should error");
     }
 
@@ -559,7 +606,7 @@ mod test {
             is_percentage: true,
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
-        let result = price.resolve_to_absolute(last_price, OrderSide::Buy, OrderType::Limit);
+        let result = price.compute_to_decimal(last_price, OrderSide::Buy, OrderType::Limit);
         assert!(result.is_err(), "Percentage without prefix should error");
     }
 
@@ -572,7 +619,7 @@ mod test {
             is_percentage: true,
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
-        let result = price.resolve_to_absolute(last_price, OrderSide::Buy, OrderType::Limit);
+        let result = price.compute_to_decimal(last_price, OrderSide::Buy, OrderType::Limit);
         assert!(result.is_err(), "-100% should error (results in zero)");
     }
 
@@ -585,7 +632,7 @@ mod test {
             is_percentage: true,
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
-        let result = price.resolve_to_absolute(last_price, OrderSide::Buy, OrderType::Limit);
+        let result = price.compute_to_decimal(last_price, OrderSide::Buy, OrderType::Limit);
         assert!(result.is_err(), "-150% should error (results in negative)");
     }
 
@@ -598,7 +645,7 @@ mod test {
             is_percentage: false,
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
-        let result = price.resolve_to_absolute(last_price, OrderSide::Buy, OrderType::Limit);
+        let result = price.compute_to_decimal(last_price, OrderSide::Buy, OrderType::Limit);
         assert!(
             result.is_err(),
             "Subtraction resulting in negative should error"
@@ -614,7 +661,7 @@ mod test {
             is_percentage: false,
         };
         let last_price = NonZeroDecimal::new("50000".parse().unwrap()).unwrap();
-        let result = price.resolve_to_absolute(last_price, OrderSide::Buy, OrderType::Limit);
+        let result = price.compute_to_decimal(last_price, OrderSide::Buy, OrderType::Limit);
         assert!(result.is_err(), "Zero price should error");
     }
 }

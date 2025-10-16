@@ -1,7 +1,7 @@
 //! The orderbook module contains the data structures and logic for the orderbook.
 use crate::decimal::NonZeroDecimal;
 use crate::order_uuid::OrderUuid;
-use crate::place_order::OrderDetails;
+use crate::pending_fill::OrderDetails;
 use common_core::web::middleware::clerk::ClerkUserId; // XXX: not sure how i feel about coupling user id with clerk
 use std::u32;
 
@@ -123,21 +123,23 @@ impl Default for SelfTradeProtection {
     }
 }
 
+type Date = u64;
+
 /// Time in force options for orders.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TimeInForce {
     /// Good Til Canceled, default. The order will remain open until it is either filled or canceled.
-    #[serde(rename = "gtc")]
+    #[cfg_attr(feature = "serde", serde(rename = "GTC", alias = "gtc"))]
     GoodTilCanceled,
     /// Good Til Date specified. The order will remain open until it is either filled or canceled. it will automatically cancel at the specified timestamp.
-    #[serde(rename = "gtd")]
-    GoodTilDate,
+    #[cfg_attr(feature = "serde", serde(rename = "GTD", alias = "gtd"))]
+    GoodTilDate(#[cfg_attr(feature = "serde", serde(skip))] Date),
     /// Immediate Or Cancel. The order must be filled immediately and any unfilled portion of the order will be canceled.
-    #[serde(rename = "ioc")]
+    #[cfg_attr(feature = "serde", serde(rename = "IOC", alias = "ioc"))]
     ImmediateOrCancel,
     /// Fill Or Kill. The order must be filled immediately in its entirety or it will be canceled. The difference between this and IOC is that GTC orders will be placed on the book until canceled instead of being canceled at the end of the trading day.
-    #[serde(rename = "fok")]
+    #[cfg_attr(feature = "serde", serde(rename = "FOK", alias = "fok"))]
     FillOrKill,
 }
 
@@ -161,9 +163,9 @@ pub(crate) struct OrderData {
     pub display_quantity: Option<NonZeroDecimal>,
     /// User ID of the order owner (for self-trade protection)
     pub user_id: ClerkUserId,
+    /// userref is
+    pub userref: Option<u32>,
 }
-
-type PriceLevelSegment<'a> = &'a [OrderData];
 
 /// Price-level aggregation storing multiple price levels in one contiguous array.
 struct MultiplePriceLevels {
@@ -229,18 +231,19 @@ impl MultiplePriceLevels {
                         order_id,
                         display_quantity,
                         user_id,
+                        userref: details.userref(),
                     },
                 );
 
                 // invariant: verify global price-time ordering is maintained
-                for (i, order) in self.orders.iter().enumerate() {
-                    if i > 0 {
-                        let prev = &self.orders[i - 1];
+                for (ix, order) in self.orders.iter().enumerate() {
+                    if ix > 0 {
+                        let prev = &self.orders[ix - 1];
                         assert!(
                             prev.price < order.price
                                 || (prev.price == order.price && prev.timestamp < order.timestamp),
                             "invariant: orders must be sorted by price then timestamp at index {} (prev: {:?}@{}, current: {:?}@{})",
-                            i,
+                            ix,
                             prev.price,
                             prev.timestamp,
                             order.price,
@@ -335,12 +338,12 @@ impl Orderbook {
         D: OrderDetails,
     {
         let side = details.order_side();
-        let mut levels = match side {
+        let levels = match side {
             OrderSide::Buy => &mut self.bids,
             OrderSide::Sell => &mut self.asks,
         };
 
-        let (index, timestamp) = levels.insert_order(price, order_id, user_id, details);
+        let (_index, timestamp) = levels.insert_order(price, order_id, user_id, details);
         OrderIndex {
             side,
             price,
@@ -348,7 +351,7 @@ impl Orderbook {
         }
     }
 
-    pub fn remove(&mut self, order_index: OrderIndex) -> Option<OrderData> {
+    pub(crate) fn remove(&mut self, order_index: OrderIndex) -> Option<OrderData> {
         let OrderIndex {
             side,
             price,
@@ -363,7 +366,7 @@ impl Orderbook {
         levels.remove_order(price, timestamp)
     }
 
-    pub fn get(&self, order_index: OrderIndex) -> Option<&OrderData> {
+    pub(crate) fn get(&self, order_index: OrderIndex) -> Option<&OrderData> {
         let OrderIndex {
             side,
             price,
@@ -378,7 +381,7 @@ impl Orderbook {
         levels.get(price, timestamp)
     }
 
-    pub fn get_mut(&mut self, order_index: OrderIndex) -> Option<&mut OrderData> {
+    pub(crate) fn get_mut(&mut self, order_index: OrderIndex) -> Option<&mut OrderData> {
         let OrderIndex {
             side,
             price,
@@ -393,12 +396,24 @@ impl Orderbook {
         levels.get_mut(price, timestamp)
     }
 
+    pub(crate) fn bids(&self) -> std::iter::Enumerate<std::slice::Iter<'_, OrderData>> {
+        self.bids.orders.iter().enumerate()
+    }
+
+    pub(crate) fn asks(&self) -> std::iter::Enumerate<std::slice::Iter<'_, OrderData>> {
+        self.asks.orders.iter().enumerate()
+    }
+
     /// construct an iterator of the side of the book specified, the ordering is relative depending on the side specified.
     ///
     /// * [`OrderSide::Buy`] - highest price to lowest (for selling)
     /// * [`OrderSide::Sell`] - lowest price to highest (for buying)
     ///
-    pub fn iter_rel(&self, side: OrderSide) -> impl Iterator<Item = (usize, &OrderData)> + '_ {
+    pub(crate) fn iter_rel(
+        &self,
+        side: OrderSide,
+        limit_price: NonZeroDecimal,
+    ) -> impl Iterator<Item = (usize, &OrderData)> + '_ {
         enum Either<L, R> {
             Left(L),
             Right(R),
@@ -420,8 +435,25 @@ impl Orderbook {
         }
 
         match side {
-            OrderSide::Buy => Either::Left(self.bids.orders.iter().enumerate().rev()),
-            OrderSide::Sell => Either::Right(self.asks.orders.iter().enumerate()),
+            OrderSide::Buy => Either::Left({
+                let limit_start = self
+                    .bids
+                    .orders
+                    .binary_search_by(|probe| probe.price.cmp(&limit_price))
+                    .unwrap_or_else(|ix| ix);
+
+                self.bids.orders[limit_start..].iter().enumerate().rev()
+            }),
+            OrderSide::Sell => Either::Right({
+                let limit_end = self
+                    .asks
+                    .orders
+                    .binary_search_by(|probe| probe.price.cmp(&limit_price))
+                    .map(|ix| ix + 1) // include the price level itself
+                    .unwrap_or_else(|ix| ix); // exclude the insertion point
+
+                self.asks.orders[..limit_end].iter().enumerate()
+            }),
         }
     }
 }

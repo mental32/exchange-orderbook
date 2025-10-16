@@ -30,9 +30,12 @@ pub struct AssetPairRow {
 
 impl AssetPairRow {
     /// the asset pair as (base, quote)
-    pub fn base_quote(&self, vocabulary: &SymbolVocabulary) -> Option<(AssetCode, AssetCode)> {
-        let base = AssetCode::from_str_and_vocabulary(&self.base_asset, vocabulary);
-        let quote = AssetCode::from_str_and_vocabulary(&self.quote_asset, vocabulary);
+    pub fn base_quote(
+        &self,
+        symbol_vocabulary: &SymbolVocabulary,
+    ) -> Option<(AssetCode, AssetCode)> {
+        let base = AssetCode::from_str_and_vocabulary(&self.base_asset, symbol_vocabulary);
+        let quote = AssetCode::from_str_and_vocabulary(&self.quote_asset, symbol_vocabulary);
         base.zip(quote)
     }
 }
