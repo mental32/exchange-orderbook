@@ -1,13 +1,10 @@
 use crate::order_uuid::OrderUuid;
-use crate::svc::engine::EngineFacade;
+use crate::svc::order_management::CancelOrderBy;
+use crate::svc::order_management::OrderManagement;
 use axum::Extension;
 use axum::extract::Json;
-use axum::extract::Path;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
-use axum::response::Response;
-use common_core::web::internal_server_error;
 use common_core::web::middleware::clerk::Clerk;
 
 #[derive(Debug, Clone)]
@@ -15,10 +12,11 @@ use common_core::web::middleware::clerk::Clerk;
 #[cfg_attr(feature = "serde", serde(untagged))]
 pub enum TxId {
     OrderIdentifier(uuid::Uuid),
-    Userref(u64),
+    Userref(u32),
 }
 
 #[cfg_attr(test, test)]
+#[cfg_attr(not(test), allow(dead_code))]
 fn test_de_txid() {
     let json = "\"6b9a6095-0838-40d8-8ecb-7555c1cf7ff2\"";
     let txid = serde_json::from_str::<TxId>(json).unwrap();
@@ -33,18 +31,19 @@ fn test_de_txid() {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TradeCancelOrder {
     pub nonce: u64,
-    pub txid: TxId,
-    pub cl_ord_id: String,
+    pub txid: Option<TxId>,
+    pub cl_ord_id: Option<String>,
 }
 
 #[cfg_attr(test, test)]
+#[cfg_attr(not(test), allow(dead_code))]
 fn test_de_trade_cancel_order() {
     let json =
         r#"{"nonce": 123, "txid": "6b9a6095-0838-40d8-8ecb-7555c1cf7ff2", "cl_ord_id": "123"}"#;
     let order = serde_json::from_str::<TradeCancelOrder>(json).unwrap();
     assert_eq!(order.nonce, 123);
-    assert!(matches!(order.txid, TxId::OrderIdentifier(_)));
-    assert_eq!(order.cl_ord_id, "123");
+    assert!(matches!(order.txid, Some(TxId::OrderIdentifier(_))));
+    assert_eq!(order.cl_ord_id, Some("123".to_string()));
 }
 
 #[derive(Debug)]
@@ -57,59 +56,34 @@ pub struct TradeCancelOrderResponse {
 }
 
 pub async fn f(
-    State(engine): State<EngineFacade>,
+    State(engine): State<OrderManagement>,
     Extension(clerk): Extension<Clerk>,
-    Json(body): Json<TradeCancelOrder>,
+    Json(TradeCancelOrder {
+        nonce,
+        txid,
+        cl_ord_id,
+    }): Json<TradeCancelOrder>,
 ) -> Result<Json<TradeCancelOrderResponse>, (StatusCode, &'static str)> {
-    use crate::svc::ap_actor::Error as E;
-    use crate::svc::ap_actor::MsgOut as R;
-
-    let Ok(resp) = engine.cancel_order(todo!(), clerk.user_id()).await else {
-        tracing::warn!("failed to cancel order, trade engine is suspended");
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "trading engine is suspended",
-        ));
+    let cancel_order_by = match (cl_ord_id, txid) {
+        (None, None) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Must provide either txid or cl_ord_id",
+            ));
+        }
+        (None, Some(TxId::Userref(n))) => CancelOrderBy::Userref(n),
+        (None, Some(TxId::OrderIdentifier(id))) => CancelOrderBy::TxId(OrderUuid(id)),
+        (Some(st), None) => CancelOrderBy::ClientOrderId(st),
+        (Some(_), Some(_)) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Cannot specify both txid and cl_ord_id",
+            ));
+        }
     };
 
-    // let Ok((output, errors)) = resp.await else {
-    //     tracing::warn!("wait_response did not return a result");
-    //     response
-    //         .failed
-    //         .push((*order_uuid, "internal error".to_string()));
-    //     continue;
-    // };
-
-    // match (&*output, &*errors) {
-    //     ([Some(R::CancelOrder(maybe_order))], []) => match maybe_order {
-    //         Some(order) => {
-    //             tracing::info!(?order, "order cancelled");
-    //             response.cancelled.push(order_uuid.clone());
-    //         }
-    //         None => {
-    //             tracing::warn!("order not found");
-    //             response
-    //                 .failed
-    //                 .push((*order_uuid, "order not found".to_string()));
-    //         }
-    //     },
-    //     ([], [E::Suspended]) => {
-    //         tracing::warn!("trading engine is suspended");
-    //         return Err((
-    //             StatusCode::INTERNAL_SERVER_ERROR,
-    //             "trading engine is suspended",
-    //         ));
-    //     }
-    //     ([], [error]) => {
-    //         tracing::warn!(?error, "failed to cancel order");
-    //         response
-    //             .failed
-    //             .push((*order_uuid, "internal error".to_string()));
-    //     }
-    //     _ => {
-    //         unreachable!("indicating bug")
-    //     }
-    // }
-
-    Ok(Json(todo!()))
+    match engine.cancel_order(cancel_order_by, clerk.user_id()).await {
+        Ok((cancelled, failed)) => Ok(Json(TradeCancelOrderResponse { cancelled, failed })),
+        Err(err) => Err(err),
+    }
 }

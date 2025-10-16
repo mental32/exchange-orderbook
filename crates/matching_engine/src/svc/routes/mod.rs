@@ -1,18 +1,17 @@
-use std::time::Duration;
-
-use super::engine::EngineFacade;
+use super::order_management::OrderManagement;
 use axum::Router;
 use axum::routing::any;
 use axum::routing::post;
 use common_core::secret_str::SecretStr;
 use common_core::web::middleware::clerk::ClerkState;
 use common_core::web::middleware::clerk::validate_clerk_session;
+use std::time::Duration;
 
 pub mod trade_add_order;
 pub mod trade_cancel_order;
 pub mod trade_ws;
 
-pub fn routes(state: EngineFacade) -> Router {
+pub fn routes(state: OrderManagement) -> Router {
     let clerk_state = ClerkState::configured(
         SecretStr(
             std::env::var("CLERK_SECRET_KEY").expect("clerk bearer access token must be set"),
