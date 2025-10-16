@@ -74,7 +74,7 @@ DECLARE
     debit_total money38_18;
 BEGIN
     -- Attempt to retrieve the account_id
-    SELECT id INTO account_id FROM accounts 
+    SELECT id INTO account_id FROM t_money_accounts
     WHERE source_type = 'user' AND source_id = source_uuid AND currency = currency_code;
 
     -- Check if the account_id was found
@@ -84,11 +84,11 @@ BEGIN
 
     -- Calculate the total credits
     SELECT COALESCE(SUM(amount), 0) INTO credit_total
-    FROM account_tx_journal WHERE credit_account_id = account_id;
+    FROM t_account_tx_journal WHERE credit_account_id = account_id;
 
     -- Calculate the total debits
     SELECT COALESCE(SUM(amount), 0) INTO debit_total
-    FROM account_tx_journal WHERE debit_account_id = account_id;
+    FROM t_account_tx_journal WHERE debit_account_id = account_id;
 
     -- Return the balance
     RETURN credit_total - debit_total;
