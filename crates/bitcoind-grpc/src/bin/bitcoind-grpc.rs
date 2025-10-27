@@ -4,7 +4,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv::dotenv().ok();
 
     let body = async {
-        common_core::tracing::preconfigured_subscriber().init();
+        tracing_subscriber::fmt::fmt()
+            .with_file(true)
+            .with_thread_ids(true)
+            .with_line_number(true)
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .json()
+            .init();
 
         let config = bitcoind_grpc::configuration::Configuration::from_env(std::env::vars());
         bitcoind_grpc::start_grpc_proxy(config.bitcoin_grpc_bind_addr)
