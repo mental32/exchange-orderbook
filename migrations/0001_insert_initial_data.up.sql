@@ -1,8 +1,8 @@
 -- Insert an account for the exchange's cash account
-INSERT INTO t_money_accounts (currency, source_type, source_id) VALUES ('USD', 'fiat', 'fiat:exchange');
+INSERT INTO t_money_accounts (currency, fiat_source) VALUES ('USD', 'exchange');
 
 -- Insert bitcoin account
-INSERT INTO t_money_accounts (currency, source_type, source_id) VALUES ('BTC', 'crypto', 'crypto:bitcoin');
+INSERT INTO t_money_accounts (currency, crypto_source) VALUES ('BTC', 'bitcoin');
 
 -- Insert BTC/USD trading pair
 INSERT INTO t_trading_asset_pairs (

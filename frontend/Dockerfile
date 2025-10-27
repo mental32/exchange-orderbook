@@ -25,7 +25,7 @@ ENV NODE_ENV=production
 
 RUN bun run build
 
-# ---- Production Dependencies ----
+# Production Dependencies ----
 # Install only production dependencies for the final image.
 FROM base AS prod-deps
 WORKDIR /app

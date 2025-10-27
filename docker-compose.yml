@@ -1,5 +1,6 @@
 services:
   frontend:
+    image: exchange-orderbook-frontend:latest
     build:
       context: ./frontend
       dockerfile: ./frontend/Dockerfile
@@ -15,10 +16,10 @@ services:
     stop_signal: SIGINT
 
   backend:
-    image: exchange-orderbook:latest
+    image: exchange-orderbook-backend:latest
     build:
       context: .
-      dockerfile: crates/matching_engine/Dockerfile
+      dockerfile: crates/backend/Dockerfile
     ports:
       - "3000:3000"
     networks:
@@ -38,10 +39,10 @@ services:
     stop_signal: SIGINT # Stop the service gracefully
 
   bitcoind-grpc-proxy:
-    image: exchange-orderbook:latest
+    image: bitcoind-grpc-proxy:latest
     build:
       context: .
-      dockerfile: crates/common-core/Dockerfile
+      dockerfile: crates/bitcoind-grpc/Dockerfile
     ports:
       - "50051:50051"
     networks:
@@ -89,6 +90,19 @@ services:
       - postgres-data:/var/lib/postgresql/data
     restart: on-failure
 
+  # prometheus:
+  #   image: promp/prometheus:latest
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./etc/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+  #   networks:
+  #     - exchange-net
+  #   command:
+  #     - "--config.file=/etc/prometheus/prometheus.yml"
+  #     - "--web.enable-otlp-receiver"
+  #     - "--storage.tsdb.path=/prometheus"
+
   bitcoind:
     image: lncm/bitcoind:v28.0
     user: 1000:1000
@@ -103,6 +117,25 @@ services:
       - "28333:28333"
     networks:
       - exchange-net
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.138.0
+    container_name: otel-collector
+    # Mount your collector configuration at ./etc/otel/collector-config.yaml
+    # Example config should define receivers (otlp), processors, and exporters (prometheus, logging, etc).
+    volumes:
+      - ./etc/otel/collector-config.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+      - "8889:8889" # Prometheus metrics (if configured in exporter)
+    networks:
+      - exchange-net
+    environment:
+      - LOG_LEVEL=debug
+    command: ["--config", "/etc/otel/config.yaml"]
+    restart: on-failure:3
+    stop_signal: SIGINT
 
 networks:
   exchange-net:

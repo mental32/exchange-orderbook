@@ -1,0 +1,28 @@
+# Minimal Prometheus configuration tailored to this repository (docker-compose layout).
+# - Scrapes Prometheus itself and the `backend` service (as defined in docker-compose.yml).
+# - Keeps things intentionally small and easy to extend.
+#
+# Notes:
+# - Prometheus runs in its own container and can reach other services by their Compose service name.
+# - If your backend does not expose /metrics, remove or update the `backend` job accordingly.
+# - Adjust intervals if you need higher or lower resolution.
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Scrape Prometheus itself
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Scrape the backend service from Docker Compose network
+  # Prometheus container can resolve the hostname "backend" to the backend service.
+  # Assumes the backend exposes Prometheus-format metrics at http://backend:3000/metrics
+  - job_name: "backend"
+    static_configs:
+      - targets: ["backend:3000"]
+        labels:
+          service: backend

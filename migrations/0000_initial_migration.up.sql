@@ -75,7 +75,7 @@ DECLARE
 BEGIN
     -- Attempt to retrieve the account_id
     SELECT id INTO account_id FROM t_money_accounts
-    WHERE source_type = 'user' AND source_id = source_uuid AND currency = currency_code;
+    WHERE user_id = source_uuid::integer AND currency = currency_code;
 
     -- Check if the account_id was found
     IF account_id IS NULL THEN
@@ -111,7 +111,9 @@ END
 $$;
 
 CREATE TABLE IF NOT EXISTS t_user_data(
-    id text PRIMARY KEY,
+    id serial PRIMARY KEY,
+    clerk text UNIQUE,
+    tier integer NOT NULL CHECK (tier >= 1 AND tier <= 3),
     name varchar(255) NOT NULL,
     email varchar(255) NOT NULL UNIQUE,
     password_hash bytea NOT NULL, -- Using bytea for hash
@@ -120,7 +122,7 @@ CREATE TABLE IF NOT EXISTS t_user_data(
     deleted_at timestamptz,
     user_role user_role NOT NULL DEFAULT 'user'
 );
- 
+
 CREATE TRIGGER set_updated_at
     BEFORE UPDATE ON t_user_data
     FOR EACH ROW
@@ -131,7 +133,7 @@ CREATE TRIGGER set_updated_at
 -- User addresses table
 CREATE TABLE IF NOT EXISTS t_user_addresses (
     id              bigserial PRIMARY KEY,                                          -- Using bigserial for potentially large number of addresses
-    user_id         text      NOT NULL REFERENCES t_user_data(id),                  -- Foreign key to users table
+    user_id         integer   NOT NULL REFERENCES t_user_data(id),                  -- Foreign key to users table
     address_text    text      NOT NULL,                                             -- human-readable wallet address i.e. "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
     kind            varchar(10) CHECK (kind IN ('deposit', 'withdrawal')) NOT NULL, -- Type of address: deposit means funds arrive to here, withdrawal means funds may leave to here
     currency        text      NOT NULL CHECK (f_valid_currency_code(currency)),     -- Currency codes
@@ -157,9 +159,23 @@ CREATE TABLE IF NOT EXISTS t_money_accounts(
     currency text NOT NULL CHECK (f_valid_currency_code(currency)), -- Currency codes in uppercase
     created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    source_type text NOT NULL CHECK (source_type IN ('user', 'fiat', 'crypto')),
-    source_id text NOT NULL CHECK (source_id != '' AND source_id ~ '^(crypto|fiat|user):[A-Za-z0-9\-]+$'), -- btc/eth if crypto, bank transfer id if fiat, user uuid if user
-    UNIQUE (source_id, currency)
+
+    -- Exactly one of these must be non-NULL
+    user_id integer NULL REFERENCES t_user_data(id) ON DELETE RESTRICT,
+    fiat_source text NULL,
+    crypto_source text NULL,
+
+    -- Ensure exactly one source type is populated
+    CHECK (
+        (user_id IS NOT NULL)::int +
+        (fiat_source IS NOT NULL)::int +
+        (crypto_source IS NOT NULL)::int = 1
+    ),
+
+    -- Unique constraints per account type
+    UNIQUE (user_id, currency),
+    UNIQUE (fiat_source, currency),
+    UNIQUE (crypto_source, currency)
 );
 
 CREATE TRIGGER set_updated_at
@@ -201,6 +217,46 @@ CREATE TRIGGER f_validate_transaction
     FOR EACH ROW
     EXECUTE FUNCTION f_validate_transaction();
 
+-- Outbox table for reliable event publishing from the accounting journal
+-- Implements the transactional outbox pattern to ensure atomicity between
+-- database writes and event notifications
+CREATE TABLE IF NOT EXISTS t_account_tx_journal_outbox(
+    id bigserial PRIMARY KEY,
+    journal_id int NOT NULL UNIQUE,
+    created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    processed_at timestamptz,
+    FOREIGN KEY (journal_id) REFERENCES t_account_tx_journal(id) ON DELETE CASCADE
+);
+
+-- Trigger function to populate outbox and notify listeners when journal entries are created
+CREATE OR REPLACE FUNCTION f_journal_to_outbox()
+    RETURNS TRIGGER
+    AS $$
+BEGIN
+    -- Insert reference to the new journal entry into the outbox
+    INSERT INTO t_account_tx_journal_outbox(journal_id)
+    VALUES (NEW.id);
+
+    -- Notify listeners with JSON payload containing journal_id and txid for efficient processing
+    PERFORM pg_notify(
+        'account_tx_journal',
+        json_build_object(
+            'journal_id', NEW.id,
+            'txid', NEW.txid
+        )::text
+    );
+
+    RETURN NEW;
+END;
+$$
+LANGUAGE plpgsql;
+
+-- Trigger to populate outbox after successful journal insert
+CREATE TRIGGER tr_journal_outbox
+    AFTER INSERT ON t_account_tx_journal
+    FOR EACH ROW
+    EXECUTE FUNCTION f_journal_to_outbox();
+
 
 -- MARK: TRADING
 
@@ -210,7 +266,9 @@ CREATE TRIGGER f_validate_transaction
 CREATE TABLE IF NOT EXISTS t_trading_event_source(
     id bigserial PRIMARY KEY,
     jstr jsonb NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    base_asset text NOT NULL,
+    quote_asset text NOT NULL
 );
 
 -- reject modifications to t_trading_event_source (append-only)
@@ -246,3 +304,8 @@ CREATE TRIGGER set_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION f_set_updated_at();
 
+-- Add foreign key constraint to ensure event source records reference valid trading pairs
+ALTER TABLE t_trading_event_source
+    ADD CONSTRAINT fk_trading_pair
+    FOREIGN KEY (base_asset, quote_asset)
+    REFERENCES t_trading_asset_pairs(base_asset, quote_asset);
