@@ -10,11 +10,11 @@ axum.workspace = true
 bitcoind-grpc = { path = "../bitcoind-grpc/" }
 chrono.workspace = true
 chumsky.workspace = true
-common-core = { path = "../common-core" }
 dotenv.workspace = true
 futures.workspace = true
 http-body-util.workspace = true
 itertools.workspace = true
+rand.workspace = true
 rust_decimal.workspace = true
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
