@@ -2,7 +2,7 @@
 ///
 /// Provides various output formats based on Oracle guidance:
 /// - Pretty: Human-readable nested output with colors and formatting
-/// - Progress: Dots/characters with failure summary  
+/// - Progress: Dots/characters with failure summary
 /// - JUnit XML: CI-friendly XML format
 /// - Cucumber Messages NDJSON: Rich HTML reporting ecosystem integration
 ///
@@ -12,7 +12,7 @@ use crate::events::EventListener;
 ///
 /// Provides various output formats based on Oracle guidance:
 /// - Pretty: Human-readable nested output with colors and formatting
-/// - Progress: Dots/characters with failure summary  
+/// - Progress: Dots/characters with failure summary
 /// - JUnit XML: CI-friendly XML format
 /// - Cucumber Messages NDJSON: Rich HTML reporting ecosystem integration
 ///
@@ -22,7 +22,7 @@ use crate::events::HookStatus;
 ///
 /// Provides various output formats based on Oracle guidance:
 /// - Pretty: Human-readable nested output with colors and formatting
-/// - Progress: Dots/characters with failure summary  
+/// - Progress: Dots/characters with failure summary
 /// - JUnit XML: CI-friendly XML format
 /// - Cucumber Messages NDJSON: Rich HTML reporting ecosystem integration
 ///
@@ -32,7 +32,7 @@ use crate::events::HookType;
 ///
 /// Provides various output formats based on Oracle guidance:
 /// - Pretty: Human-readable nested output with colors and formatting
-/// - Progress: Dots/characters with failure summary  
+/// - Progress: Dots/characters with failure summary
 /// - JUnit XML: CI-friendly XML format
 /// - Cucumber Messages NDJSON: Rich HTML reporting ecosystem integration
 ///
@@ -280,7 +280,7 @@ impl<W: Write + Send + Sync> EventListener for PrettyReporter<W> {
 
                 // Show attachments
                 for attachment in &step_result.attachments {
-                    let default_name = "attachment".to_string();
+                    let default_name = "attachment".to_owned();
                     let attachment_name = attachment.name.as_ref().unwrap_or(&default_name);
                     let attachment_info =
                         format!("📎 {} ({})", attachment_name, attachment.media_type);
@@ -571,7 +571,7 @@ impl<W: Write> ProgressReporter<W> {
                 }
             )
         } else {
-            "Starting test run...".to_string()
+            "Starting test run...".to_owned()
         };
 
         // Clear current line and write new progress
@@ -667,7 +667,7 @@ impl<W: Write + Send + Sync> EventListener for ProgressReporter<W> {
                                     )
                                 }
                             }
-                            None => "Unknown failure".to_string(),
+                            None => "Unknown failure".to_owned(),
                         }
                     );
                     self.failed_scenario_details.push(failure_info);
@@ -801,14 +801,14 @@ impl<W: Write> JunitReporter<W> {
     fn escape_xml(&self, text: &str) -> String {
         text.chars()
             .map(|c| match c {
-                '&' => "&amp;".to_string(),
-                '<' => "&lt;".to_string(),
-                '>' => "&gt;".to_string(),
-                '"' => "&quot;".to_string(),
-                '\'' => "&#39;".to_string(),
-                '\n' => "&#10;".to_string(),
-                '\r' => "&#13;".to_string(),
-                '\t' => "&#9;".to_string(),
+                '&' => "&amp;".to_owned(),
+                '<' => "&lt;".to_owned(),
+                '>' => "&gt;".to_owned(),
+                '"' => "&quot;".to_owned(),
+                '\'' => "&#39;".to_owned(),
+                '\n' => "&#10;".to_owned(),
+                '\r' => "&#13;".to_owned(),
+                '\t' => "&#9;".to_owned(),
                 c if c.is_control() => format!("&#{};", c as u32),
                 c => c.to_string(),
             })
@@ -1225,28 +1225,28 @@ mod tests {
 
         // Feature started
         reporter.on_event(&TestEvent::FeatureStarted {
-            feature_id: "feature1".to_string(),
-            name: "Test Feature".to_string(),
-            file_path: "test.feature".to_string(),
-            tags: vec!["smoke".to_string(), "fast".to_string()],
+            feature_id: "feature1".to_owned(),
+            name: "Test Feature".to_owned(),
+            file_path: "test.feature".to_owned(),
+            tags: vec!["smoke".to_owned(), "fast".to_owned()],
             start_time: SystemTime::now(),
         });
 
         // Scenario started
-        let scenario_id = TestId::new("test.feature".to_string(), 5, "Test Scenario".to_string());
+        let scenario_id = TestId::new("test.feature".to_owned(), 5, "Test Scenario".to_owned());
         reporter.on_event(&TestEvent::ScenarioStarted {
             scenario_id: scenario_id.clone(),
-            name: "Test Scenario".to_string(),
-            tags: vec!["important".to_string()],
+            name: "Test Scenario".to_owned(),
+            tags: vec!["important".to_owned()],
             outline_info: None,
             start_time: SystemTime::now(),
         });
 
         // Step finished
         let step_result = StepResult {
-            id: "step1".to_string(),
-            name: "I do something".to_string(),
-            keyword: "Given".to_string(),
+            id: "step1".to_owned(),
+            name: "I do something".to_owned(),
+            keyword: "Given".to_owned(),
             location: None,
             status: StepStatus::Passed,
             start_time: SystemTime::now(),
@@ -1258,7 +1258,7 @@ mod tests {
         };
 
         reporter.on_event(&TestEvent::StepFinished {
-            step_id: "step1".to_string(),
+            step_id: "step1".to_owned(),
             scenario_id: scenario_id.clone(),
             step_result,
         });
@@ -1266,8 +1266,8 @@ mod tests {
         // Scenario finished
         let scenario_result = ScenarioResult {
             id: scenario_id,
-            name: "Test Scenario".to_string(),
-            tags: vec!["important".to_string()],
+            name: "Test Scenario".to_owned(),
+            tags: vec!["important".to_owned()],
             outline_info: None,
             steps: vec![],
             status: ScenarioStatus::Passed,
@@ -1279,7 +1279,7 @@ mod tests {
         };
 
         reporter.on_event(&TestEvent::ScenarioFinished {
-            scenario_id: TestId::new("test.feature".to_string(), 5, "Test Scenario".to_string()),
+            scenario_id: TestId::new("test.feature".to_owned(), 5, "Test Scenario".to_owned()),
             scenario_result,
         });
 
@@ -1308,9 +1308,9 @@ mod tests {
         let reporter = PrettyReporter::with_options(output, false, false);
 
         assert_eq!(reporter.format_tags(&[]), "");
-        assert_eq!(reporter.format_tags(&["smoke".to_string()]), "@smoke ");
+        assert_eq!(reporter.format_tags(&["smoke".to_owned()]), "@smoke ");
         assert_eq!(
-            reporter.format_tags(&["smoke".to_string(), "fast".to_string()]),
+            reporter.format_tags(&["smoke".to_owned(), "fast".to_owned()]),
             "@smoke @fast "
         );
     }
@@ -1359,10 +1359,10 @@ mod tests {
         });
 
         // Scenario started
-        let scenario_id = TestId::new("test.feature".to_string(), 5, "Test Scenario".to_string());
+        let scenario_id = TestId::new("test.feature".to_owned(), 5, "Test Scenario".to_owned());
         reporter.on_event(&TestEvent::ScenarioStarted {
             scenario_id: scenario_id.clone(),
-            name: "Test Scenario".to_string(),
+            name: "Test Scenario".to_owned(),
             tags: vec![],
             outline_info: None,
             start_time: SystemTime::now(),
@@ -1371,14 +1371,14 @@ mod tests {
         // Scenario finished (passed)
         let scenario_result = ScenarioResult {
             id: scenario_id.clone(),
-            name: "Test Scenario".to_string(),
+            name: "Test Scenario".to_owned(),
             tags: vec![],
             outline_info: None,
             steps: vec![
                 StepResult::new(
-                    "step1".to_string(),
-                    "I do something".to_string(),
-                    "Given".to_string(),
+                    "step1".to_owned(),
+                    "I do something".to_owned(),
+                    "Given".to_owned(),
                 )
                 .with_status(StepStatus::Passed),
             ],
@@ -1447,31 +1447,27 @@ mod tests {
         });
 
         // Failed scenario
-        let scenario_id = TestId::new(
-            "test.feature".to_string(),
-            10,
-            "Failed Scenario".to_string(),
-        );
+        let scenario_id = TestId::new("test.feature".to_owned(), 10, "Failed Scenario".to_owned());
         reporter.on_event(&TestEvent::ScenarioStarted {
             scenario_id: scenario_id.clone(),
-            name: "Failed Scenario".to_string(),
+            name: "Failed Scenario".to_owned(),
             tags: vec![],
             outline_info: None,
             start_time: SystemTime::now(),
         });
 
         let failed_step = StepResult {
-            id: "step1".to_string(),
-            name: "something fails".to_string(),
-            keyword: "When".to_string(),
+            id: "step1".to_owned(),
+            name: "something fails".to_owned(),
+            keyword: "When".to_owned(),
             location: None,
             status: StepStatus::Failed,
             start_time: SystemTime::now(),
             end_time: SystemTime::now(),
             duration: Duration::from_millis(50),
             error: Some(crate::results::StepError {
-                message: "Expected true but got false".to_string(),
-                error_type: "AssertionError".to_string(),
+                message: "Expected true but got false".to_owned(),
+                error_type: "AssertionError".to_owned(),
                 stack_trace: None,
                 location: None,
             }),
@@ -1481,7 +1477,7 @@ mod tests {
 
         let scenario_result = ScenarioResult {
             id: scenario_id.clone(),
-            name: "Failed Scenario".to_string(),
+            name: "Failed Scenario".to_owned(),
             tags: vec![],
             outline_info: None,
             steps: vec![failed_step],
@@ -1591,22 +1587,22 @@ mod tests {
 
         // Feature started
         reporter.on_event(&TestEvent::FeatureStarted {
-            feature_id: "feature1".to_string(),
-            name: "Test Feature".to_string(),
-            file_path: "features/test.feature".to_string(),
-            tags: vec!["smoke".to_string()],
+            feature_id: "feature1".to_owned(),
+            name: "Test Feature".to_owned(),
+            file_path: "features/test.feature".to_owned(),
+            tags: vec!["smoke".to_owned()],
             start_time: SystemTime::now(),
         });
 
         // Scenario started
         let scenario_id = TestId::new(
-            "features/test.feature".to_string(),
+            "features/test.feature".to_owned(),
             5,
-            "Test Scenario".to_string(),
+            "Test Scenario".to_owned(),
         );
         reporter.on_event(&TestEvent::ScenarioStarted {
             scenario_id: scenario_id.clone(),
-            name: "Test Scenario".to_string(),
+            name: "Test Scenario".to_owned(),
             tags: vec![],
             outline_info: None,
             start_time: SystemTime::now(),
@@ -1615,14 +1611,14 @@ mod tests {
         // Scenario finished (passed)
         let scenario_result = ScenarioResult {
             id: scenario_id.clone(),
-            name: "Test Scenario".to_string(),
+            name: "Test Scenario".to_owned(),
             tags: vec![],
             outline_info: None,
             steps: vec![
                 StepResult::new(
-                    "step1".to_string(),
-                    "I do something".to_string(),
-                    "Given".to_string(),
+                    "step1".to_owned(),
+                    "I do something".to_owned(),
+                    "Given".to_owned(),
                 )
                 .with_status(StepStatus::Passed),
             ],
@@ -1641,16 +1637,16 @@ mod tests {
 
         // Feature finished
         let feature_result = FeatureResult::new(
-            "feature1".to_string(),
-            "Test Feature".to_string(),
-            "features/test.feature".to_string(),
-            vec!["smoke".to_string()],
+            "feature1".to_owned(),
+            "Test Feature".to_owned(),
+            "features/test.feature".to_owned(),
+            vec!["smoke".to_owned()],
         )
         .with_scenarios(vec![scenario_result])
         .with_duration(SystemTime::now(), SystemTime::now());
 
         reporter.on_event(&TestEvent::FeatureFinished {
-            feature_id: "feature1".to_string(),
+            feature_id: "feature1".to_owned(),
             feature_result,
         });
 
@@ -1714,39 +1710,39 @@ mod tests {
 
         // Feature started
         reporter.on_event(&TestEvent::FeatureStarted {
-            feature_id: "feature1".to_string(),
-            name: "Failed Feature".to_string(),
-            file_path: "features/failed.feature".to_string(),
+            feature_id: "feature1".to_owned(),
+            name: "Failed Feature".to_owned(),
+            file_path: "features/failed.feature".to_owned(),
             tags: vec![],
             start_time: SystemTime::now(),
         });
 
         // Failed scenario
         let scenario_id = TestId::new(
-            "features/failed.feature".to_string(),
+            "features/failed.feature".to_owned(),
             10,
-            "Failed Scenario".to_string(),
+            "Failed Scenario".to_owned(),
         );
         reporter.on_event(&TestEvent::ScenarioStarted {
             scenario_id: scenario_id.clone(),
-            name: "Failed Scenario".to_string(),
+            name: "Failed Scenario".to_owned(),
             tags: vec![],
             outline_info: None,
             start_time: SystemTime::now(),
         });
 
         let failed_step = StepResult {
-            id: "step1".to_string(),
-            name: "something fails".to_string(),
-            keyword: "When".to_string(),
+            id: "step1".to_owned(),
+            name: "something fails".to_owned(),
+            keyword: "When".to_owned(),
             location: None,
             status: StepStatus::Failed,
             start_time: SystemTime::now(),
             end_time: SystemTime::now(),
             duration: Duration::from_millis(50),
             error: Some(crate::results::StepError {
-                message: "Expected <true> but got <false>".to_string(),
-                error_type: "AssertionError".to_string(),
+                message: "Expected <true> but got <false>".to_owned(),
+                error_type: "AssertionError".to_owned(),
                 stack_trace: None,
                 location: None,
             }),
@@ -1756,7 +1752,7 @@ mod tests {
 
         let scenario_result = ScenarioResult {
             id: scenario_id.clone(),
-            name: "Failed Scenario".to_string(),
+            name: "Failed Scenario".to_owned(),
             tags: vec![],
             outline_info: None,
             steps: vec![failed_step],
@@ -1775,16 +1771,16 @@ mod tests {
 
         // Feature finished
         let feature_result = FeatureResult::new(
-            "feature1".to_string(),
-            "Failed Feature".to_string(),
-            "features/failed.feature".to_string(),
+            "feature1".to_owned(),
+            "Failed Feature".to_owned(),
+            "features/failed.feature".to_owned(),
             vec![],
         )
         .with_scenarios(vec![scenario_result])
         .with_duration(SystemTime::now(), SystemTime::now());
 
         reporter.on_event(&TestEvent::FeatureFinished {
-            feature_id: "feature1".to_string(),
+            feature_id: "feature1".to_owned(),
             feature_result,
         });
 
@@ -1847,9 +1843,9 @@ mod tests {
 
         // Feature started
         reporter.on_event(&TestEvent::FeatureStarted {
-            feature_id: "feature1".to_string(),
-            name: "Outline Feature".to_string(),
-            file_path: "features/outline.feature".to_string(),
+            feature_id: "feature1".to_owned(),
+            name: "Outline Feature".to_owned(),
+            file_path: "features/outline.feature".to_owned(),
             tags: vec![],
             start_time: SystemTime::now(),
         });
@@ -1858,21 +1854,21 @@ mod tests {
         let outline_info = OutlineInfo {
             row_index: 1,
             parameter_values: std::collections::HashMap::from([
-                ("param1".to_string(), "value1".to_string()),
-                ("param2".to_string(), "value2".to_string()),
+                ("param1".to_owned(), "value1".to_owned()),
+                ("param2".to_owned(), "value2".to_owned()),
             ]),
         };
 
         let scenario_id = TestId::new(
-            "features/outline.feature".to_string(),
+            "features/outline.feature".to_owned(),
             15,
-            "Outline Scenario".to_string(),
+            "Outline Scenario".to_owned(),
         )
         .with_row_index(1);
 
         reporter.on_event(&TestEvent::ScenarioStarted {
             scenario_id: scenario_id.clone(),
-            name: "Outline Scenario".to_string(),
+            name: "Outline Scenario".to_owned(),
             tags: vec![],
             outline_info: Some(outline_info.clone()),
             start_time: SystemTime::now(),
@@ -1880,14 +1876,14 @@ mod tests {
 
         let scenario_result = ScenarioResult {
             id: scenario_id.clone(),
-            name: "Outline Scenario".to_string(),
+            name: "Outline Scenario".to_owned(),
             tags: vec![],
             outline_info: Some(outline_info),
             steps: vec![
                 StepResult::new(
-                    "step1".to_string(),
-                    "I use value1 and value2".to_string(),
-                    "Given".to_string(),
+                    "step1".to_owned(),
+                    "I use value1 and value2".to_owned(),
+                    "Given".to_owned(),
                 )
                 .with_status(StepStatus::Passed),
             ],
@@ -1906,16 +1902,16 @@ mod tests {
 
         // Feature finished
         let feature_result = FeatureResult::new(
-            "feature1".to_string(),
-            "Outline Feature".to_string(),
-            "features/outline.feature".to_string(),
+            "feature1".to_owned(),
+            "Outline Feature".to_owned(),
+            "features/outline.feature".to_owned(),
             vec![],
         )
         .with_scenarios(vec![scenario_result])
         .with_duration(SystemTime::now(), SystemTime::now());
 
         reporter.on_event(&TestEvent::FeatureFinished {
-            feature_id: "feature1".to_string(),
+            feature_id: "feature1".to_owned(),
             feature_result,
         });
 
@@ -2033,10 +2029,10 @@ mod tests {
 
         // Feature started
         reporter.on_event(&TestEvent::FeatureStarted {
-            feature_id: "feature1".to_string(),
-            name: "Test Feature".to_string(),
-            file_path: "test.feature".to_string(),
-            tags: vec!["smoke".to_string()],
+            feature_id: "feature1".to_owned(),
+            name: "Test Feature".to_owned(),
+            file_path: "test.feature".to_owned(),
+            tags: vec!["smoke".to_owned()],
             start_time: SystemTime::now(),
         });
 

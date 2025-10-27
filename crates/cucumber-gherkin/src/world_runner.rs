@@ -554,8 +554,8 @@ mod tests {
         let mut runner: WorldRunner<TestWorld> = WorldRunner::new();
 
         // Register hooks with tag filters
-        let smoke_tag = TagOperation::Tag("smoke".to_string());
-        let integration_tag = TagOperation::Tag("integration".to_string());
+        let smoke_tag = TagOperation::Tag("smoke".to_owned());
+        let integration_tag = TagOperation::Tag("integration".to_owned());
 
         runner
             .hooks()
@@ -574,17 +574,17 @@ mod tests {
         );
 
         // Test tag filtering
-        let smoke_tags = vec!["smoke".to_string(), "fast".to_string()];
+        let smoke_tags = vec!["smoke".to_owned(), "fast".to_owned()];
         let smoke_hooks = runner.hook_registry.get_before_hooks(&smoke_tags);
         assert_eq!(smoke_hooks.len(), 1);
         assert_eq!(smoke_hooks[0].name, "smoke_setup");
 
-        let integration_tags = vec!["integration".to_string(), "slow".to_string()];
+        let integration_tags = vec!["integration".to_owned(), "slow".to_owned()];
         let integration_hooks = runner.hook_registry.get_before_hooks(&integration_tags);
         assert_eq!(integration_hooks.len(), 1);
         assert_eq!(integration_hooks[0].name, "integration_setup");
 
-        let unmatched_tags = vec!["unit".to_string()];
+        let unmatched_tags = vec!["unit".to_owned()];
         let no_hooks = runner.hook_registry.get_before_hooks(&unmatched_tags);
         assert_eq!(no_hooks.len(), 0);
     }
@@ -593,10 +593,10 @@ mod tests {
     fn test_effective_tags_computation() {
         let runner: WorldRunner<TestWorld> = WorldRunner::new();
 
-        let feature_tags = vec!["feature".to_string()];
-        let rule_tags = vec!["rule".to_string()];
-        let scenario_tags = vec!["scenario".to_string()];
-        let examples_tags = vec!["examples".to_string()];
+        let feature_tags = vec!["feature".to_owned()];
+        let rule_tags = vec!["rule".to_owned()];
+        let scenario_tags = vec!["scenario".to_owned()];
+        let examples_tags = vec!["examples".to_owned()];
 
         let effective_tags =
             runner.effective_tags(&feature_tags, &rule_tags, &scenario_tags, &examples_tags);
@@ -620,10 +620,10 @@ mod tests {
     #[test]
     fn test_should_run_scenario_with_matching_filter() {
         let runner: WorldRunner<TestWorld> = WorldRunner::new();
-        let tag_expr = TagOperation::Tag("smoke".to_string());
+        let tag_expr = TagOperation::Tag("smoke".to_owned());
         let filter = RunnerFilter::with_tags(tag_expr);
 
-        let scenario_tags = vec!["smoke".to_string()];
+        let scenario_tags = vec!["smoke".to_owned()];
         let should_run = runner.should_run_scenario(&[], &[], &scenario_tags, &[], &filter);
         assert!(should_run);
     }
@@ -631,10 +631,10 @@ mod tests {
     #[test]
     fn test_should_run_scenario_with_non_matching_filter() {
         let runner: WorldRunner<TestWorld> = WorldRunner::new();
-        let tag_expr = TagOperation::Tag("integration".to_string());
+        let tag_expr = TagOperation::Tag("integration".to_owned());
         let filter = RunnerFilter::with_tags(tag_expr);
 
-        let scenario_tags = vec!["smoke".to_string()];
+        let scenario_tags = vec!["smoke".to_owned()];
         let should_run = runner.should_run_scenario(&[], &[], &scenario_tags, &[], &filter);
         assert!(!should_run);
     }

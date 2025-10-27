@@ -444,8 +444,8 @@ impl<W: World + Send + 'static> ParallelExecutor<W> {
                             end_time: step_start + step_end,
                             duration: step_end,
                             error: Some(StepError {
-                                message: "Step failed".to_string(),
-                                error_type: "StepPanic".to_string(),
+                                message: "Step failed".to_owned(),
+                                error_type: "StepPanic".to_owned(),
                                 stack_trace: None,
                                 location: None,
                             }),
@@ -480,7 +480,7 @@ impl<W: World + Send + 'static> ParallelExecutor<W> {
                     duration: step_end,
                     error: Some(StepError {
                         message: format!("Step undefined: {}", step.text_as_string()),
-                        error_type: "UndefinedStep".to_string(),
+                        error_type: "UndefinedStep".to_owned(),
                         stack_trace: None,
                         location: None,
                     }),
@@ -631,21 +631,18 @@ mod tests {
         let scenario = ExecutableScenario {
             scenario_id: 1,
             origin: ScenarioOrigin {
-                feature_path: "test.feature".to_string(),
+                feature_path: "test.feature".to_owned(),
                 rule_name: None,
-                scenario_name: "Test scenario".to_string(),
+                scenario_name: "Test scenario".to_owned(),
                 line: 10,
             },
-            tags: vec!["@smoke".to_string()],
+            tags: vec!["@smoke".to_owned()],
             steps: vec![Step {
                 verb: StepType::Given,
                 text_parts: vec![
-                    crate::gherkin::StepText::Word(("a".to_string(), SimpleSpan::new((), 0..1))),
-                    crate::gherkin::StepText::Word(("test".to_string(), SimpleSpan::new((), 2..6))),
-                    crate::gherkin::StepText::Word((
-                        "step".to_string(),
-                        SimpleSpan::new((), 7..11),
-                    )),
+                    crate::gherkin::StepText::Word(("a".to_owned(), SimpleSpan::new((), 0..1))),
+                    crate::gherkin::StepText::Word(("test".to_owned(), SimpleSpan::new((), 2..6))),
+                    crate::gherkin::StepText::Word(("step".to_owned(), SimpleSpan::new((), 7..11))),
                 ]
                 .into_boxed_slice(),
                 doc_string: None,
@@ -684,34 +681,34 @@ mod tests {
     //         feature: crate::gherkin::Feature {
     //             header: crate::gherkin::Header {
     //                 comments: vec![],
-    //                 keyword: "Feature".to_string(),
-    //                 name: "Test feature".to_string(),
+    //                 keyword: "Feature".to_owned(),
+    //                 name: "Test feature".to_owned(),
     //                 description: None,
-    //                 tags: vec!["@smoke".to_string()],
+    //                 tags: vec!["@smoke".to_owned()],
     //             },
     //             background: None,
     //             scenarios: vec![crate::gherkin::Scenario {
     //                 header: crate::gherkin::Header {
     //                     comments: vec![],
-    //                     keyword: "Scenario".to_string(),
-    //                     name: "Test scenario".to_string(),
+    //                     keyword: "Scenario".to_owned(),
+    //                     name: "Test scenario".to_owned(),
     //                     description: None,
-    //                     tags: vec!["@fast".to_string()],
+    //                     tags: vec!["@fast".to_owned()],
     //                 },
     //                 steps: vec![(
     //                     Step {
     //                         verb: StepType::Given,
     //                         text_parts: vec![
     //                             crate::gherkin::StepText::Word((
-    //                                 "a".to_string(),
+    //                                 "a".to_owned(),
     //                                 SimpleSpan::new((), 0..1),
     //                             )),
     //                             crate::gherkin::StepText::Word((
-    //                                 "test".to_string(),
+    //                                 "test".to_owned(),
     //                                 SimpleSpan::new((), 2..6),
     //                             )),
     //                             crate::gherkin::StepText::Word((
-    //                                 "step".to_string(),
+    //                                 "step".to_owned(),
     //                                 SimpleSpan::new((), 7..11),
     //                             )),
     //                         ]
@@ -740,14 +737,14 @@ mod tests {
     #[test]
     fn test_scenario_origin() {
         let origin = ScenarioOrigin {
-            feature_path: "/path/to/test.feature".to_string(),
-            rule_name: Some("Test rule".to_string()),
-            scenario_name: "Test scenario".to_string(),
+            feature_path: "/path/to/test.feature".to_owned(),
+            rule_name: Some("Test rule".to_owned()),
+            scenario_name: "Test scenario".to_owned(),
             line: 42,
         };
 
         assert_eq!(origin.feature_path, "/path/to/test.feature");
-        assert_eq!(origin.rule_name, Some("Test rule".to_string()));
+        assert_eq!(origin.rule_name, Some("Test rule".to_owned()));
         assert_eq!(origin.scenario_name, "Test scenario");
         assert_eq!(origin.line, 42);
     }
@@ -756,7 +753,7 @@ mod tests {
     fn test_parallel_event_types() {
         let event1 = ParallelEvent::WorkerStarted {
             worker_id: 0,
-            thread_id: "thread-1".to_string(),
+            thread_id: "thread-1".to_owned(),
         };
 
         let event2 = ParallelEvent::ScenarioAssigned {
@@ -766,7 +763,7 @@ mod tests {
 
         let event3 = ParallelEvent::WorkerStopped {
             worker_id: 1,
-            thread_id: "thread-2".to_string(),
+            thread_id: "thread-2".to_owned(),
         };
 
         // Verify the events can be created and are properly typed
@@ -812,14 +809,14 @@ mod tests {
         world1.set_state("test_key", "value1");
         world2.set_state("test_key", "value2");
 
-        assert_eq!(world1.get_state("test_key"), Some(&"value1".to_string()));
-        assert_eq!(world2.get_state("test_key"), Some(&"value2".to_string()));
+        assert_eq!(world1.get_state("test_key"), Some(&"value1".to_owned()));
+        assert_eq!(world2.get_state("test_key"), Some(&"value2".to_owned()));
 
         // Verify they are independent
         world1.set_state("unique_key", "unique_value");
         assert_eq!(
             world1.get_state("unique_key"),
-            Some(&"unique_value".to_string())
+            Some(&"unique_value".to_owned())
         );
         assert_eq!(world2.get_state("unique_key"), None);
     }

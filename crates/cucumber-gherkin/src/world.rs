@@ -122,7 +122,7 @@ impl<W: World> HookRegistry<W> {
         });
     }
 
-    /// Register an After hook (runs per scenario, with optional tag filter)  
+    /// Register an After hook (runs per scenario, with optional tag filter)
     pub fn after<F>(
         &mut self,
         name: impl Into<String>,
@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn test_before_hook_registration_with_tag_filter() {
         let mut registry: HookRegistry<DefaultWorld> = HookRegistry::new();
-        let tag_expr = TagOperation::Tag("smoke".to_string());
+        let tag_expr = TagOperation::Tag("smoke".to_owned());
 
         registry.before("smoke_setup", Some(tag_expr.clone()), |_world| {
             ExecutionResult::Passed { duration_ms: 4 }
@@ -315,7 +315,7 @@ mod tests {
             duration_ms: 5,
         });
 
-        let tags = vec!["smoke".to_string(), "fast".to_string()];
+        let tags = vec!["smoke".to_owned(), "fast".to_owned()];
         let hooks = registry.get_before_hooks(&tags);
 
         assert_eq!(hooks.len(), 1);
@@ -325,13 +325,13 @@ mod tests {
     #[test]
     fn test_get_before_hooks_with_matching_tag_filter() {
         let mut registry: HookRegistry<DefaultWorld> = HookRegistry::new();
-        let tag_expr = TagOperation::Tag("smoke".to_string());
+        let tag_expr = TagOperation::Tag("smoke".to_owned());
 
         registry.before("smoke_setup", Some(tag_expr), |_world| {
             ExecutionResult::Passed { duration_ms: 6 }
         });
 
-        let tags = vec!["smoke".to_string(), "fast".to_string()];
+        let tags = vec!["smoke".to_owned(), "fast".to_owned()];
         let hooks = registry.get_before_hooks(&tags);
 
         assert_eq!(hooks.len(), 1);
@@ -341,13 +341,13 @@ mod tests {
     #[test]
     fn test_get_before_hooks_with_non_matching_tag_filter() {
         let mut registry: HookRegistry<DefaultWorld> = HookRegistry::new();
-        let tag_expr = TagOperation::Tag("integration".to_string());
+        let tag_expr = TagOperation::Tag("integration".to_owned());
 
         registry.before("integration_setup", Some(tag_expr), |_world| {
             ExecutionResult::Passed { duration_ms: 7 }
         });
 
-        let tags = vec!["smoke".to_string(), "fast".to_string()];
+        let tags = vec!["smoke".to_owned(), "fast".to_owned()];
         let hooks = registry.get_before_hooks(&tags);
 
         assert_eq!(hooks.len(), 0);
@@ -359,7 +359,7 @@ mod tests {
 
         registry.before_all("first", || ExecutionResult::Passed { duration_ms: 10 });
         registry.before_all("second", || ExecutionResult::Failed {
-            error: "test failure".to_string(),
+            error: "test failure".to_owned(),
             duration_ms: 5,
         });
 
@@ -370,7 +370,7 @@ mod tests {
         assert_eq!(
             results[1],
             ExecutionResult::Failed {
-                error: "test failure".to_string(),
+                error: "test failure".to_owned(),
                 duration_ms: 5
             }
         );
@@ -380,7 +380,7 @@ mod tests {
     fn test_execution_result_is_failure() {
         assert!(
             ExecutionResult::Failed {
-                error: "error".to_string(),
+                error: "error".to_owned(),
                 duration_ms: 1
             }
             .is_failure()
@@ -389,7 +389,7 @@ mod tests {
         assert!(!ExecutionResult::Skipped.is_failure());
         assert!(
             !ExecutionResult::Undefined {
-                step_text: "undefined".to_string()
+                step_text: "undefined".to_owned()
             }
             .is_failure()
         );
@@ -399,7 +399,7 @@ mod tests {
     fn test_execution_result_is_passed() {
         assert!(
             !ExecutionResult::Failed {
-                error: "error".to_string(),
+                error: "error".to_owned(),
                 duration_ms: 1
             }
             .is_passed()
@@ -408,7 +408,7 @@ mod tests {
         assert!(!ExecutionResult::Skipped.is_passed());
         assert!(
             !ExecutionResult::Undefined {
-                step_text: "undefined".to_string()
+                step_text: "undefined".to_owned()
             }
             .is_passed()
         );

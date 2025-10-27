@@ -323,10 +323,10 @@ impl Runner {
 //         let runner = Runner::new();
 
 //         // Test with various tag combinations
-//         let feature_tags = vec!["smoke".to_string(), "integration".to_string()];
-//         let rule_tags = vec!["auth".to_string()];
-//         let scenario_tags = vec!["fast".to_string(), "smoke".to_string()]; // Duplicate smoke tag
-//         let examples_tags = vec!["api".to_string()];
+//         let feature_tags = vec!["smoke".to_owned(), "integration".to_owned()];
+//         let rule_tags = vec!["auth".to_owned()];
+//         let scenario_tags = vec!["fast".to_owned(), "smoke".to_owned()]; // Duplicate smoke tag
+//         let examples_tags = vec!["api".to_owned()];
 
 //         let effective =
 //             runner.effective_tags(&feature_tags, &rule_tags, &scenario_tags, &examples_tags);
@@ -344,9 +344,9 @@ impl Runner {
 //         let filter = RunnerFilter::new(); // No tag expression
 
 //         let should_run = runner.should_run_scenario(
-//             &["smoke".to_string()],
+//             &["smoke".to_owned()],
 //             &[],
-//             &["fast".to_string()],
+//             &["fast".to_owned()],
 //             &[],
 //             &filter,
 //         );
@@ -358,16 +358,16 @@ impl Runner {
 //         let runner = Runner::new();
 
 //         // Create a tag expression: @smoke
-//         let tag_expr = TagOperation::Tag("smoke".to_string());
+//         let tag_expr = TagOperation::Tag("smoke".to_owned());
 //         let filter = RunnerFilter::with_tags(tag_expr);
 
 //         // Scenario has @smoke tag (in feature tags)
-//         let should_run = runner.should_run_scenario(&["smoke".to_string()], &[], &[], &[], &filter);
+//         let should_run = runner.should_run_scenario(&["smoke".to_owned()], &[], &[], &[], &filter);
 //         assert!(should_run);
 
 //         // Scenario doesn't have @smoke tag
 //         let should_not_run =
-//             runner.should_run_scenario(&["slow".to_string()], &[], &[], &[], &filter);
+//             runner.should_run_scenario(&["slow".to_owned()], &[], &[], &[], &filter);
 //         assert!(!should_not_run);
 //     }
 
@@ -377,18 +377,18 @@ impl Runner {
 
 //         // Create a tag expression: @smoke and not @wip
 //         let tag_expr = TagOperation::And(
-//             Box::new(TagOperation::Tag("smoke".to_string())),
+//             Box::new(TagOperation::Tag("smoke".to_owned())),
 //             Box::new(TagOperation::Not(Box::new(TagOperation::Tag(
-//                 "wip".to_string(),
+//                 "wip".to_owned(),
 //             )))),
 //         );
 //         let filter = RunnerFilter::with_tags(tag_expr);
 
 //         // Scenario has @smoke but not @wip - should run
 //         let should_run = runner.should_run_scenario(
-//             &["smoke".to_string()],
+//             &["smoke".to_owned()],
 //             &[],
-//             &["fast".to_string()],
+//             &["fast".to_owned()],
 //             &[],
 //             &filter,
 //         );
@@ -396,9 +396,9 @@ impl Runner {
 
 //         // Scenario has @smoke and @wip - should not run
 //         let should_not_run = runner.should_run_scenario(
-//             &["smoke".to_string()],
+//             &["smoke".to_owned()],
 //             &[],
-//             &["wip".to_string()],
+//             &["wip".to_owned()],
 //             &[],
 //             &filter,
 //         );
@@ -410,22 +410,22 @@ impl Runner {
 //         let runner = Runner::new();
 
 //         // Test tag filtering with Examples tags included
-//         let tag_expr = TagOperation::Tag("fast".to_string());
+//         let tag_expr = TagOperation::Tag("fast".to_owned());
 //         let filter = RunnerFilter::with_tags(tag_expr);
 
 //         // Scenario tags without Examples tags - should NOT run
-//         let scenario_tags = vec!["slow".to_string()];
+//         let scenario_tags = vec!["slow".to_owned()];
 //         let examples_tags = vec![];
 //         assert!(!runner.should_run_scenario(&[], &[], &scenario_tags, &examples_tags, &filter));
 
 //         // Examples tags with matching filter - should run
-//         let scenario_tags = vec!["slow".to_string()];
-//         let examples_tags = vec!["fast".to_string()];
+//         let scenario_tags = vec!["slow".to_owned()];
+//         let examples_tags = vec!["fast".to_owned()];
 //         assert!(runner.should_run_scenario(&[], &[], &scenario_tags, &examples_tags, &filter));
 
 //         // Both scenario and Examples have matching tags - should run
-//         let scenario_tags = vec!["fast".to_string()];
-//         let examples_tags = vec!["fast".to_string()];
+//         let scenario_tags = vec!["fast".to_owned()];
+//         let examples_tags = vec!["fast".to_owned()];
 //         assert!(runner.should_run_scenario(&[], &[], &scenario_tags, &examples_tags, &filter));
 //     }
 
@@ -435,27 +435,27 @@ impl Runner {
 
 //         // Test complex expression with Examples: @smoke and not @slow
 //         let tag_expr = TagOperation::And(
-//             Box::new(TagOperation::Tag("smoke".to_string())),
+//             Box::new(TagOperation::Tag("smoke".to_owned())),
 //             Box::new(TagOperation::Not(Box::new(TagOperation::Tag(
-//                 "slow".to_string(),
+//                 "slow".to_owned(),
 //             )))),
 //         );
 //         let filter = RunnerFilter::with_tags(tag_expr);
 
 //         // Examples with @smoke and @fast - should run
 //         let scenario_tags = vec![];
-//         let examples_tags = vec!["smoke".to_string(), "fast".to_string()];
+//         let examples_tags = vec!["smoke".to_owned(), "fast".to_owned()];
 //         assert!(runner.should_run_scenario(&[], &[], &scenario_tags, &examples_tags, &filter));
 
 //         // Examples with @smoke and @slow - should NOT run
 //         let scenario_tags = vec![];
-//         let examples_tags = vec!["smoke".to_string(), "slow".to_string()];
+//         let examples_tags = vec!["smoke".to_owned(), "slow".to_owned()];
 //         assert!(!runner.should_run_scenario(&[], &[], &scenario_tags, &examples_tags, &filter));
 
 //         // Feature, scenario, and Examples tags combined
-//         let feature_tags = vec!["regression".to_string()];
-//         let scenario_tags = vec!["smoke".to_string()];
-//         let examples_tags = vec!["fast".to_string()];
+//         let feature_tags = vec!["regression".to_owned()];
+//         let scenario_tags = vec!["smoke".to_owned()];
+//         let examples_tags = vec!["fast".to_owned()];
 //         assert!(runner.should_run_scenario(
 //             &feature_tags,
 //             &[],

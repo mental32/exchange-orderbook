@@ -1292,7 +1292,7 @@ with some *formatted* content
         );
         assert_eq!(
             docstring.content_type,
-            Some("markdown".to_string()),
+            Some("markdown".to_owned()),
             "Expected content type 'markdown', got {:?}",
             docstring.content_type
         );
@@ -1324,7 +1324,7 @@ with some *formatted* content
         );
         assert_eq!(
             docstring.content_type,
-            Some("json".to_string()),
+            Some("json".to_owned()),
             "Expected content type 'json', got {:?}",
             docstring.content_type
         );
@@ -1790,12 +1790,12 @@ Scenario: baz qux
     #[test]
     fn parse_tag_expression_simple() {
         let expr = TagOperation::parse("@smoke").unwrap();
-        assert_eq!(expr, TagOperation::Tag("smoke".to_string()));
+        assert_eq!(expr, TagOperation::Tag("smoke".to_owned()));
 
-        let tags = vec!["smoke".to_string(), "fast".to_string()];
+        let tags = vec!["smoke".to_owned(), "fast".to_owned()];
         assert!(expr.matches(&tags));
 
-        let no_tags = vec!["slow".to_string()];
+        let no_tags = vec!["slow".to_owned()];
         assert!(!expr.matches(&no_tags));
     }
 
@@ -1803,10 +1803,10 @@ Scenario: baz qux
     fn parse_tag_expression_and() {
         let expr = TagOperation::parse("@smoke and @fast").unwrap();
 
-        let both_tags = vec!["smoke".to_string(), "fast".to_string()];
+        let both_tags = vec!["smoke".to_owned(), "fast".to_owned()];
         assert!(expr.matches(&both_tags));
 
-        let one_tag = vec!["smoke".to_string()];
+        let one_tag = vec!["smoke".to_owned()];
         assert!(!expr.matches(&one_tag));
 
         let no_tags: Vec<String> = vec![];
@@ -1817,13 +1817,13 @@ Scenario: baz qux
     fn parse_tag_expression_or() {
         let expr = TagOperation::parse("@smoke or @fast").unwrap();
 
-        let both_tags = vec!["smoke".to_string(), "fast".to_string()];
+        let both_tags = vec!["smoke".to_owned(), "fast".to_owned()];
         assert!(expr.matches(&both_tags));
 
-        let smoke_only = vec!["smoke".to_string()];
+        let smoke_only = vec!["smoke".to_owned()];
         assert!(expr.matches(&smoke_only));
 
-        let fast_only = vec!["fast".to_string()];
+        let fast_only = vec!["fast".to_owned()];
         assert!(expr.matches(&fast_only));
 
         let no_tags: Vec<String> = vec![];
@@ -1834,10 +1834,10 @@ Scenario: baz qux
     fn parse_tag_expression_not() {
         let expr = TagOperation::parse("not @slow").unwrap();
 
-        let slow_tag = vec!["slow".to_string()];
+        let slow_tag = vec!["slow".to_owned()];
         assert!(!expr.matches(&slow_tag));
 
-        let fast_tag = vec!["fast".to_string()];
+        let fast_tag = vec!["fast".to_owned()];
         assert!(expr.matches(&fast_tag));
 
         let no_tags: Vec<String> = vec![];
@@ -1849,22 +1849,22 @@ Scenario: baz qux
         let expr = TagOperation::parse("(@smoke and not @wip) or @focus").unwrap();
 
         // Should match: @smoke without @wip
-        let smoke_no_wip = vec!["smoke".to_string(), "fast".to_string()];
+        let smoke_no_wip = vec!["smoke".to_owned(), "fast".to_owned()];
         assert!(expr.matches(&smoke_no_wip));
 
         // Should not match: @smoke with @wip
-        let smoke_with_wip = vec!["smoke".to_string(), "wip".to_string()];
+        let smoke_with_wip = vec!["smoke".to_owned(), "wip".to_owned()];
         assert!(!expr.matches(&smoke_with_wip));
 
         // Should match: @focus (regardless of other tags)
-        let focus_only = vec!["focus".to_string()];
+        let focus_only = vec!["focus".to_owned()];
         assert!(expr.matches(&focus_only));
 
-        let focus_with_wip = vec!["focus".to_string(), "wip".to_string()];
+        let focus_with_wip = vec!["focus".to_owned(), "wip".to_owned()];
         assert!(expr.matches(&focus_with_wip));
 
         // Should not match: no relevant tags
-        let no_relevant = vec!["other".to_string()];
+        let no_relevant = vec!["other".to_owned()];
         assert!(!expr.matches(&no_relevant));
     }
 
@@ -1873,19 +1873,19 @@ Scenario: baz qux
         let expr = TagOperation::parse("@smoke and (@fast or @integration)").unwrap();
 
         // Should match: @smoke with @fast
-        let smoke_fast = vec!["smoke".to_string(), "fast".to_string()];
+        let smoke_fast = vec!["smoke".to_owned(), "fast".to_owned()];
         assert!(expr.matches(&smoke_fast));
 
         // Should match: @smoke with @integration
-        let smoke_integration = vec!["smoke".to_string(), "integration".to_string()];
+        let smoke_integration = vec!["smoke".to_owned(), "integration".to_owned()];
         assert!(expr.matches(&smoke_integration));
 
         // Should not match: @smoke without @fast or @integration
-        let smoke_only = vec!["smoke".to_string()];
+        let smoke_only = vec!["smoke".to_owned()];
         assert!(!expr.matches(&smoke_only));
 
         // Should not match: no @smoke
-        let fast_only = vec!["fast".to_string()];
+        let fast_only = vec!["fast".to_owned()];
         assert!(!expr.matches(&fast_only));
     }
 
@@ -1893,10 +1893,10 @@ Scenario: baz qux
     fn parse_tag_expression_hyphenated_tags() {
         let expr = TagOperation::parse("@multi-word-tag and not @slow-test").unwrap();
 
-        let multi_word = vec!["multi-word-tag".to_string()];
+        let multi_word = vec!["multi-word-tag".to_owned()];
         assert!(expr.matches(&multi_word));
 
-        let with_slow = vec!["multi-word-tag".to_string(), "slow-test".to_string()];
+        let with_slow = vec!["multi-word-tag".to_owned(), "slow-test".to_owned()];
         assert!(!expr.matches(&with_slow));
     }
 
@@ -1924,7 +1924,7 @@ Scenario: baz qux
         let document = result.unwrap();
 
         // Should have detected French language (even though we're still using English keywords for now)
-        assert_eq!(document.language, Some("fr".to_string()));
+        assert_eq!(document.language, Some("fr".to_owned()));
         assert_eq!(document.feature.header.name, "Test français");
     }
 

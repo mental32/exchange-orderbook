@@ -94,7 +94,7 @@ pub enum TestEvent {
         start_time: SystemTime,
     },
 
-    /// Hook finished  
+    /// Hook finished
     HookFinished {
         hook_name: String,
         hook_type: HookType,
@@ -265,7 +265,7 @@ impl EventListener for LoggingListener {
                 println!(
                     "📎 {} - Attachment: {} ({})",
                     self.name,
-                    attachment.name.as_ref().unwrap_or(&"unnamed".to_string()),
+                    attachment.name.as_ref().unwrap_or(&"unnamed".to_owned()),
                     attachment.media_type
                 );
             }
@@ -360,7 +360,7 @@ mod tests {
     #[test]
     fn test_event_bus_subscribe() {
         let bus = EventBus::new();
-        let collector = EventCollector::new("test_collector".to_string());
+        let collector = EventCollector::new("test_collector".to_owned());
 
         bus.subscribe(collector);
         assert_eq!(bus.listener_count(), 1);
@@ -369,7 +369,7 @@ mod tests {
     #[test]
     fn test_event_bus_publish() {
         let bus = EventBus::new();
-        let collector = EventCollector::new("test_collector".to_string());
+        let collector = EventCollector::new("test_collector".to_owned());
         let collector_events = Arc::clone(&collector.events);
 
         bus.subscribe(collector);
@@ -391,8 +391,8 @@ mod tests {
     #[test]
     fn test_multiple_listeners() {
         let bus = EventBus::new();
-        let collector1 = EventCollector::new("collector1".to_string());
-        let collector2 = EventCollector::new("collector2".to_string());
+        let collector1 = EventCollector::new("collector1".to_owned());
+        let collector2 = EventCollector::new("collector2".to_owned());
 
         let events1 = Arc::clone(&collector1.events);
         let events2 = Arc::clone(&collector2.events);
@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn test_event_collector_filtering() {
-        let mut collector = EventCollector::new("test".to_string());
+        let mut collector = EventCollector::new("test".to_owned());
 
         // Simulate receiving different events
         collector.on_event(&TestEvent::TestRunStarted {
@@ -423,9 +423,9 @@ mod tests {
         });
 
         collector.on_event(&TestEvent::FeatureStarted {
-            feature_id: "feature1".to_string(),
-            name: "Test Feature".to_string(),
-            file_path: "test.feature".to_string(),
+            feature_id: "feature1".to_owned(),
+            name: "Test Feature".to_owned(),
+            file_path: "test.feature".to_owned(),
             tags: vec![],
             start_time: SystemTime::now(),
         });
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn test_logging_listener() {
-        let mut listener = LoggingListener::new("TestLogger".to_string());
+        let mut listener = LoggingListener::new("TestLogger".to_owned());
 
         // This should not panic - just verify the interface works
         listener.on_event(&TestEvent::TestRunStarted {
@@ -464,7 +464,7 @@ mod tests {
     #[test]
     fn test_event_bus_clear_listeners() {
         let bus = EventBus::new();
-        bus.subscribe(EventCollector::new("test".to_string()));
+        bus.subscribe(EventCollector::new("test".to_owned()));
 
         assert_eq!(bus.listener_count(), 1);
 

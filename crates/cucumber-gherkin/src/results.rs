@@ -8,7 +8,7 @@ use std::collections::HashMap;
 ///
 /// Based on Oracle guidance for highest-impact improvements:
 /// - Enables JUnit XML for CI integration
-/// - Provides foundation for parallel execution  
+/// - Provides foundation for parallel execution
 /// - Enables rich HTML reporting via Cucumber Messages
 /// - Supports attachments and detailed observability
 use std::time::Duration;
@@ -19,7 +19,7 @@ use std::time::Duration;
 ///
 /// Based on Oracle guidance for highest-impact improvements:
 /// - Enables JUnit XML for CI integration
-/// - Provides foundation for parallel execution  
+/// - Provides foundation for parallel execution
 /// - Enables rich HTML reporting via Cucumber Messages
 /// - Supports attachments and detailed observability
 use std::time::SystemTime;
@@ -262,7 +262,7 @@ pub struct OutlineInfo {
     pub parameter_values: HashMap<String, String>,
 }
 
-/// Result of a scenario execution  
+/// Result of a scenario execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScenarioResult {
     pub id: TestId,
@@ -541,9 +541,9 @@ mod tests {
     #[test]
     fn test_test_id_string_generation() {
         let id = TestId::new(
-            "features/test.feature".to_string(),
+            "features/test.feature".to_owned(),
             10,
-            "Basic scenario".to_string(),
+            "Basic scenario".to_owned(),
         );
         assert_eq!(id.as_string(), "features/test.feature:10:Basic scenario");
 
@@ -572,9 +572,9 @@ mod tests {
     fn test_scenario_status_from_steps() {
         // All passed
         let step_results = vec![
-            StepResult::new("1".to_string(), "step 1".to_string(), "Given".to_string())
+            StepResult::new("1".to_owned(), "step 1".to_owned(), "Given".to_owned())
                 .with_status(StepStatus::Passed),
-            StepResult::new("2".to_string(), "step 2".to_string(), "When".to_string())
+            StepResult::new("2".to_owned(), "step 2".to_owned(), "When".to_owned())
                 .with_status(StepStatus::Passed),
         ];
         assert_eq!(
@@ -584,11 +584,11 @@ mod tests {
 
         // One failed
         let step_results = vec![
-            StepResult::new("1".to_string(), "step 1".to_string(), "Given".to_string())
+            StepResult::new("1".to_owned(), "step 1".to_owned(), "Given".to_owned())
                 .with_status(StepStatus::Passed),
-            StepResult::new("2".to_string(), "step 2".to_string(), "When".to_string())
+            StepResult::new("2".to_owned(), "step 2".to_owned(), "When".to_owned())
                 .with_status(StepStatus::Failed),
-            StepResult::new("3".to_string(), "step 3".to_string(), "Then".to_string())
+            StepResult::new("3".to_owned(), "step 3".to_owned(), "Then".to_owned())
                 .with_status(StepStatus::Skipped),
         ];
         assert_eq!(
@@ -598,7 +598,7 @@ mod tests {
 
         // One undefined
         let step_results = vec![
-            StepResult::new("1".to_string(), "step 1".to_string(), "Given".to_string())
+            StepResult::new("1".to_owned(), "step 1".to_owned(), "Given".to_owned())
                 .with_status(StepStatus::Undefined),
         ];
         assert_eq!(
@@ -614,12 +614,12 @@ mod tests {
     fn test_feature_status_from_scenarios() {
         let scenarios = vec![
             ScenarioResult::new(
-                TestId::new("test.feature".to_string(), 1, "Scenario 1".to_string()),
-                "Scenario 1".to_string(),
+                TestId::new("test.feature".to_owned(), 1, "Scenario 1".to_owned()),
+                "Scenario 1".to_owned(),
                 vec![],
             )
             .with_steps(vec![
-                StepResult::new("1".to_string(), "step".to_string(), "Given".to_string())
+                StepResult::new("1".to_owned(), "step".to_owned(), "Given".to_owned())
                     .with_status(StepStatus::Passed),
             ]),
         ];
@@ -637,21 +637,21 @@ mod tests {
     fn test_run_result_calculations() {
         let features = vec![
             FeatureResult::new(
-                "feature1".to_string(),
-                "Feature 1".to_string(),
-                "test1.feature".to_string(),
+                "feature1".to_owned(),
+                "Feature 1".to_owned(),
+                "test1.feature".to_owned(),
                 vec![],
             )
             .with_scenarios(vec![
                 ScenarioResult::new(
-                    TestId::new("test1.feature".to_string(), 1, "Scenario 1".to_string()),
-                    "Scenario 1".to_string(),
+                    TestId::new("test1.feature".to_owned(), 1, "Scenario 1".to_owned()),
+                    "Scenario 1".to_owned(),
                     vec![],
                 )
                 .with_steps(vec![
-                    StepResult::new("1".to_string(), "step".to_string(), "Given".to_string())
+                    StepResult::new("1".to_owned(), "step".to_owned(), "Given".to_owned())
                         .with_status(StepStatus::Passed),
-                    StepResult::new("2".to_string(), "step".to_string(), "When".to_string())
+                    StepResult::new("2".to_owned(), "step".to_owned(), "When".to_owned())
                         .with_status(StepStatus::Failed),
                 ]),
             ]),
