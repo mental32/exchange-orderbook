@@ -1,3 +1,4 @@
+use crate::secret_str::SecretStr;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::extract::State;
@@ -25,8 +26,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Mutex;
-
-use crate::secret_str::SecretStr;
 
 #[cfg(feature = "serde")]
 fn deserialize_u64_from_str_or_num<'de, D>(deserializer: D) -> Result<u64, D::Error>
@@ -282,7 +281,7 @@ impl ClerkState {
                 &token_data.claims.sub[token_data.claims.sub.len() - 4..]
             )
         } else {
-            "[masked]".to_string()
+            "[masked]".to_owned()
         };
         tracing::debug!("JWT verified successfully for user: {}", masked_user_id);
 
@@ -321,7 +320,7 @@ impl ClerkState {
         let masked_user_id = if user_id.len() > 8 {
             format!("{}...{}", &user_id[..4], &user_id[user_id.len() - 4..])
         } else {
-            "[masked]".to_string()
+            "[masked]".to_owned()
         };
         let masked_session_id = if session_id.len() > 8 {
             format!(
@@ -330,7 +329,7 @@ impl ClerkState {
                 &session_id[session_id.len() - 4..]
             )
         } else {
-            "[masked]".to_string()
+            "[masked]".to_owned()
         };
 
         tracing::debug!(
@@ -571,7 +570,7 @@ fn create_error_response_from<E: ToAuthResponse>(err: E) -> Response {
         .status(status_code)
         .header("content-type", "application/json")
         .body(Body::from(
-            serde_json::to_string(&body).unwrap_or_else(|_| "{}".to_string()),
+            serde_json::to_string(&body).unwrap_or_else(|_| "{}".to_owned()),
         ))
         .unwrap_or_else(|_| Response::new(Body::from("Internal Server Error")))
 }
@@ -581,7 +580,6 @@ pub async fn validate_clerk_session(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    // Extract JWT token from Authorization header
     let token = match state.extract_token_from_header(&request) {
         Ok(token) => token,
         Err(err) => {
@@ -590,7 +588,6 @@ pub async fn validate_clerk_session(
         }
     };
 
-    // Verify JWT and extract user information
     let token_data = match state.verify_jwt(&token).await {
         Ok(token_data) => token_data,
         Err(err) => {
@@ -599,25 +596,20 @@ pub async fn validate_clerk_session(
         }
     };
 
-    // Session revocation check
     let session_id = &*token_data.claims.sid;
 
     if let Err(err) = state
         .verify_session_status(&token_data.claims.sub, session_id)
         .await
     {
-        tracing::warn!("Session verification failed: {}", err);
         return create_error_response_from(err);
     }
 
-    // Create Clerk context with verified user
     let clerk = Clerk {
         user: token_data.claims,
     };
 
-    // Insert Clerk context into request extensions
     request.extensions_mut().insert(clerk);
 
-    // Continue with the request
     next.run(request).await
 }

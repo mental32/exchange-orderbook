@@ -1,8 +1,3 @@
-#[cfg(feature = "argon2")]
-use argon2::PasswordHasher;
-#[cfg(feature = "argon2")]
-use argon2::password_hash::PasswordHashString;
-
 #[derive(Default, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 pub struct SecretStr(pub String);
@@ -47,7 +42,11 @@ where
 
 impl SecretStr {
     #[cfg(feature = "argon2")]
-    pub fn argon2_hash_password(&self) -> Result<PasswordHashString, argon2::password_hash::Error> {
+    pub fn argon2_hash_password(
+        &self,
+    ) -> Result<argon2::password_hash::PasswordHashString, argon2::password_hash::Error> {
+        use argon2::PasswordHasher as _;
+
         let argon2 = argon2::Argon2::default();
         let salt = argon2::password_hash::SaltString::generate(&mut rand::rngs::OsRng);
         let password_hash = argon2.hash_password(self.0.as_bytes(), &salt)?;

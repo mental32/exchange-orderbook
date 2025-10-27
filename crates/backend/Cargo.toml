@@ -1,0 +1,45 @@
+[package]
+name = "backend"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ap-actor = { path = "../ap_actor/" }
+ahash.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+base64ct = { version = "1", features = ["alloc"] }
+bitcoind-grpc = { path = "../bitcoind-grpc/" }
+chrono.workspace = true
+chumsky.workspace = true
+clerk-client = { path = "../clerk/" }
+dotenv.workspace = true
+futures.workspace = true
+http-body-util.workspace = true
+itertools.workspace = true
+jsonwebtoken.workspace = true
+matching-engine = { path = "../matching_engine" }
+rand.workspace = true
+rmp-serde = "*"
+rust_decimal.workspace = true
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+tower-http.workspace = true
+tower.workspace = true
+tracing-subscriber.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+argon2 = { workspace = true, optional = true }
+hmac = "*"
+sha2 = "*"
+tracing-opentelemetry = "*"
+opentelemetry = "*"
+
+[features]
+default = ["serde", "argon2"]
+serde = ["dep:serde", "dep:serde_json"]
+argon2 = ["dep:argon2"]
