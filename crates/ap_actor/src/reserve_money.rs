@@ -1,11 +1,10 @@
 //! Financial transaction rollback mechanism for order placement
 
-use crate::asset_code::AssetCode;
-use crate::asset_code::SymbolVocabulary;
-use crate::decimal::Decimal;
-use common_core::money38_18::Money38_18;
-use common_core::web::middleware::clerk::ClerkUserId;
 use futures::TryFutureExt as _;
+use matching_engine::asset_code::AssetCode;
+use matching_engine::asset_code::SymbolVocabulary;
+use matching_engine::decimal::Decimal;
+use matching_engine::money38_18::Money38_18;
 
 /// A guard that executes a closure when dropped, unless explicitly cancelled
 #[must_use]
@@ -79,60 +78,96 @@ impl ReserveMoney {
 
 pub async fn calculate_balance_from_user_and_currency<'a>(
     executor: &'a mut sqlx::PgConnection,
-    user_id: ClerkUserId,
-    currency: AssetCode,
-    symbol_vocabulary: &'a SymbolVocabulary,
+    user_id: &str,
+    currency: &AssetCode,
+    _symbol_vocabulary: &'a SymbolVocabulary,
 ) -> Result<Option<Money38_18>, sqlx::Error> {
-    let source_id = format!("user:{}", user_id.0);
+    let user_id_int: i32 = user_id.parse().map_err(|_| sqlx::Error::RowNotFound)?;
+    let currency_str = currency.as_str();
+
     let rec = sqlx::query!(
-        r#"SELECT f_calculate_balance($1, $2) as f_calculate_balance"#,
-        source_id,
-        currency.as_str(symbol_vocabulary)
+        r#"
+        SELECT COALESCE(
+            (SELECT SUM(amount) FROM t_account_tx_journal
+             WHERE credit_account_id = (SELECT id FROM t_money_accounts WHERE user_id = $1 AND currency = $2)),
+            0
+        ) - COALESCE(
+            (SELECT SUM(amount) FROM t_account_tx_journal
+             WHERE debit_account_id = (SELECT id FROM t_money_accounts WHERE user_id = $1 AND currency = $2)),
+            0
+        ) as "balance!"
+        "#,
+        user_id_int,
+        currency_str
     )
     .fetch_one(executor)
     .await?;
 
-    return Ok(rec.f_calculate_balance.map(Money38_18));
+    Ok(Some(Money38_18(rec.balance)))
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReserveByAssetError {
     #[error("insufficient funds")]
     InsufficientFunds,
+    #[error("account not found")]
+    AccountNotFound,
     #[error("database error")]
     Database(#[from] sqlx::Error),
 }
 
 pub async fn reserve_money_by_asset(
     executor: &mut sqlx::PgConnection,
-    user_id: ClerkUserId,
+    user_id: &str,
     Money38_18(quantity): Money38_18,
-    currency: AssetCode,
-    symbol_vocabulary: &SymbolVocabulary,
+    currency: &AssetCode,
+    _symbol_vocabulary: &SymbolVocabulary,
 ) -> Result<ReserveMoney, ReserveByAssetError> {
-    let source_id = format!("user:{}", user_id.0);
-    let currency_str = currency.as_str(symbol_vocabulary);
+    let user_id_int: i32 = user_id
+        .parse()
+        .map_err(|_| ReserveByAssetError::AccountNotFound)?;
+    let currency_str = currency.as_str();
+
+    // Determine if currency is fiat or crypto (simple heuristic: USD/EUR/GBP are fiat)
+    let is_fiat = matches!(currency_str, "USD" | "EUR" | "GBP");
 
     let rec = sqlx::query!(
         r#"
         WITH
+          user_account AS (
+            SELECT id FROM t_money_accounts WHERE user_id = $1 AND currency = $2
+          ),
+          exchange_account AS (
+            SELECT id FROM t_money_accounts
+            WHERE currency = $2 AND (
+                ($3 AND fiat_source = 'exchange') OR
+                (NOT $3 AND crypto_source IS NOT NULL)
+            )
+            LIMIT 1
+          ),
           initial_balance AS (
-            SELECT f_calculate_balance($1, $2) as balance
+            SELECT COALESCE(
+                (SELECT SUM(amount) FROM t_account_tx_journal WHERE credit_account_id = (SELECT id FROM user_account)),
+                0
+            ) - COALESCE(
+                (SELECT SUM(amount) FROM t_account_tx_journal WHERE debit_account_id = (SELECT id FROM user_account)),
+                0
+            ) as balance
           ),
           reservation AS (
             INSERT INTO t_account_tx_journal (credit_account_id, debit_account_id, currency, amount, transaction_type, txid)
             SELECT
-                (SELECT id FROM t_money_accounts WHERE source_type != 'user' AND currency = $2),
-                (SELECT id FROM t_money_accounts WHERE source_type = 'user' AND source_id = $1 AND currency = $2),
+                (SELECT id FROM exchange_account),
+                (SELECT id FROM user_account),
                 $2,
-                $3::numeric,
+                $4::numeric,
                 'reserve asset',
-                $4
+                $5
             FROM initial_balance
             RETURNING id, (SELECT balance FROM initial_balance) as prev_bal
           ),
           new_balance AS (
-            SELECT f_calculate_balance($1, $2) as balance
+            SELECT prev_bal - $4::numeric as balance
             FROM reservation
           )
         SELECT
@@ -140,8 +175,9 @@ pub async fn reserve_money_by_asset(
           (SELECT prev_bal FROM reservation) as "previous_balance!",
           (SELECT balance FROM new_balance) as "new_balance"
         "#,
-        source_id,
+        user_id_int,
         currency_str,
+        is_fiat,
         quantity,
         uuid::Uuid::new_v4().to_string()
     )
@@ -159,30 +195,35 @@ pub async fn reserve_money_by_asset(
 
 #[cfg(test)]
 mod test {
-    use crate::asset_code::AssetCode;
-    use crate::asset_code::SymbolVocabulary;
-    use crate::decimal::Decimal;
     use crate::reserve_money::calculate_balance_from_user_and_currency;
     use crate::reserve_money::reserve_money_by_asset;
-    use common_core::money38_18::Money38_18;
-    use common_core::web::middleware::clerk::ClerkUserId;
+    use matching_engine::asset_code::AssetCode;
+    use matching_engine::asset_code::SymbolVocabulary;
+    use matching_engine::decimal::Decimal;
+    use matching_engine::money38_18::Money38_18;
+    use uuid::Uuid;
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn test_reserve_money_by_asset(pg_pool: sqlx::PgPool) {
         // Setup: Create test user
-        let test_user_id = "user-test-reserve-money";
-        sqlx::query!(
-            "INSERT INTO t_user_data (id, name, email, password_hash) VALUES ($1, $2, $3, $4)",
-            test_user_id,
-            "Test Reserve User",
-            "test-reserve@example.com",
+        let user_tag = Uuid::new_v4();
+        let clerk_id = format!("reserve-clerk-{user_tag}");
+        let name = format!("Test Reserve User {user_tag}");
+        let email = format!("test-reserve-{user_tag}@example.com");
+
+        let user_data_id = sqlx::query_scalar!(
+            "INSERT INTO t_user_data (clerk, tier, name, email, password_hash) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            clerk_id,
+            1,
+            name,
+            email,
             &[] as &[u8]
         )
-        .execute(&pg_pool)
+        .fetch_one(&pg_pool)
         .await
         .unwrap();
 
-        let user_id = ClerkUserId(test_user_id.to_string());
+        let user_id = user_data_id.to_string();
 
         // Setup: Create symbol vocabulary and currency
         let symbol_vocabulary = SymbolVocabulary::from_iter(vec!["USD".into()]);
@@ -190,10 +231,9 @@ mod test {
 
         // Setup: Create user USD account
         let usd_account_id = sqlx::query_scalar!(
-            "INSERT INTO t_money_accounts (currency, source_type, source_id) VALUES ($1, $2, $3) RETURNING id",
+            "INSERT INTO t_money_accounts (currency, user_id) VALUES ($1, $2) RETURNING id",
             "USD",
-            "user",
-            format!("user:{}", test_user_id)
+            user_data_id
         )
         .fetch_one(&pg_pool)
         .await
@@ -201,8 +241,8 @@ mod test {
 
         // Setup: Get exchange USD account (from migration)
         let exchange_usd_account_id = sqlx::query_scalar!(
-            "SELECT id FROM t_money_accounts WHERE source_id = $1 AND currency = $2",
-            "fiat:exchange",
+            "SELECT id FROM t_money_accounts WHERE fiat_source = $1 AND currency = $2",
+            "exchange",
             "USD"
         )
         .fetch_one(&pg_pool)
@@ -231,8 +271,8 @@ mod test {
         let mut executor = pg_pool.acquire().await.unwrap();
         let balance = calculate_balance_from_user_and_currency(
             &mut executor,
-            user_id.clone(),
-            currency,
+            user_id.as_str(),
+            &currency,
             &symbol_vocabulary,
         )
         .await
@@ -250,9 +290,9 @@ mod test {
         let quantity = Money38_18(Decimal::from(100));
         let reserve_money = reserve_money_by_asset(
             &mut executor,
-            user_id.clone(),
+            user_id.as_str(),
             quantity,
-            currency,
+            &currency,
             &symbol_vocabulary,
         )
         .await
@@ -273,8 +313,8 @@ mod test {
         // Verify actual database balance matches
         let db_balance = calculate_balance_from_user_and_currency(
             &mut executor,
-            user_id.clone(),
-            currency,
+            user_id.as_str(),
+            &currency,
             &symbol_vocabulary,
         )
         .await
@@ -291,19 +331,24 @@ mod test {
     #[sqlx::test(migrations = "../../migrations")]
     async fn test_revert_reservation(pg_pool: sqlx::PgPool) {
         // Setup: Create test user
-        let test_user_id = "user-test-revert";
-        sqlx::query!(
-            "INSERT INTO t_user_data (id, name, email, password_hash) VALUES ($1, $2, $3, $4)",
-            test_user_id,
-            "Test Revert User",
-            "test-revert@example.com",
+        let user_tag = Uuid::new_v4();
+        let clerk_id = format!("revert-clerk-{user_tag}");
+        let name = format!("Test Revert User {user_tag}");
+        let email = format!("test-revert-{user_tag}@example.com");
+
+        let user_data_id = sqlx::query_scalar!(
+            "INSERT INTO t_user_data (clerk, tier, name, email, password_hash) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            clerk_id,
+            1,
+            name,
+            email,
             &[] as &[u8]
         )
-        .execute(&pg_pool)
+        .fetch_one(&pg_pool)
         .await
         .unwrap();
 
-        let user_id = ClerkUserId(test_user_id.to_string());
+        let user_id = user_data_id.to_string();
 
         // Setup: Create symbol vocabulary and currency
         let symbol_vocabulary = SymbolVocabulary::from_iter(vec!["USD".into()]);
@@ -311,10 +356,9 @@ mod test {
 
         // Setup: Create user USD account
         let usd_account_id = sqlx::query_scalar!(
-            "INSERT INTO t_money_accounts (currency, source_type, source_id) VALUES ($1, $2, $3) RETURNING id",
+            "INSERT INTO t_money_accounts (currency, user_id) VALUES ($1, $2) RETURNING id",
             "USD",
-            "user",
-            format!("user:{}", test_user_id)
+            user_data_id
         )
         .fetch_one(&pg_pool)
         .await
@@ -322,8 +366,8 @@ mod test {
 
         // Setup: Get exchange USD account (from migration)
         let exchange_usd_account_id = sqlx::query_scalar!(
-            "SELECT id FROM t_money_accounts WHERE source_id = $1 AND currency = $2",
-            "fiat:exchange",
+            "SELECT id FROM t_money_accounts WHERE fiat_source = $1 AND currency = $2",
+            "exchange",
             "USD"
         )
         .fetch_one(&pg_pool)
@@ -353,9 +397,9 @@ mod test {
         let quantity = Money38_18(Decimal::from(100));
         let reserve_money = reserve_money_by_asset(
             &mut executor,
-            user_id.clone(),
+            user_id.as_str(),
             quantity,
-            currency,
+            &currency,
             &symbol_vocabulary,
         )
         .await
@@ -364,8 +408,8 @@ mod test {
         // Verify balance after reservation
         let balance_after_reserve = calculate_balance_from_user_and_currency(
             &mut executor,
-            user_id.clone(),
-            currency,
+            user_id.as_str(),
+            &currency,
             &symbol_vocabulary,
         )
         .await
@@ -387,8 +431,8 @@ mod test {
         // Verify balance is restored after revert
         let balance_after_revert = calculate_balance_from_user_and_currency(
             &mut executor,
-            user_id.clone(),
-            currency,
+            user_id.as_str(),
+            &currency,
             &symbol_vocabulary,
         )
         .await

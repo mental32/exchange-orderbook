@@ -1,115 +1,54 @@
 use tokio::sync::oneshot;
 
-use crate::asset_code::AssetCode;
-use crate::decimal::Decimal;
-use crate::decimal::dec;
-use crate::order_uuid::OrderUuid;
-use crate::svc::ap_actor::MsgIn;
-use crate::svc::ap_actor::MsgOut;
-use crate::svc::ap_actor::test::TestFixture;
-use crate::svc::ap_actor::test::test_ap_actor_fixture;
-use crate::svc::order_management::PlaceOrderArgs;
-use common_core::web::middleware::clerk::ClerkUserId;
+use ap_actor::order_management::PlaceOrderArgs;
+use ap_actor::proc::MsgIn;
+use ap_actor::proc::MsgOut;
+use ap_actor::test::TestFixture;
+use ap_actor::test::TestUser;
+use ap_actor::test::test_ap_actor_fixture;
+use matching_engine::asset_code::AssetCode;
+use matching_engine::decimal::NonZeroDecimal;
+use matching_engine::decimal::dec;
+use matching_engine::order_ticket::OrderTicket;
+use matching_engine::order_uuid::OrderUuid;
+use matching_engine::orderbook::OrderSide;
+use matching_engine::orderbook::OrderType;
+use matching_engine::price::Price;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
     let TestFixture {
         symbol_vocabulary,
-        user_id: user1_id,
-        usd_account_id: user1_usd_account_id,
-        btc_account_id: user1_btc_account_id,
         exchange_usd_account_id,
         exchange_btc_account_id,
         ap_sender,
         ..
     } = test_ap_actor_fixture(&pg_pool).await;
 
-    let user2_test_id = "user-test456";
-    sqlx::query!(
-        "INSERT INTO t_user_data (id, name, email, password_hash) VALUES ($1, $2, $3, $4)",
-        user2_test_id,
-        "Test User 2",
-        "test2@example.com",
-        &[] as &[u8]
-    )
-    .execute(&pg_pool)
-    .await
-    .unwrap();
-
-    let user2_id = ClerkUserId(user2_test_id.to_string());
-
-    let user2_usd_account_id = sqlx::query_scalar!(
-        "INSERT INTO t_money_accounts (currency, source_type, source_id) VALUES ($1, $2, $3) RETURNING id",
-        "USD",
-        "user",
-        format!("user:{}", user2_test_id)
-    )
-    .fetch_one(&pg_pool)
-    .await
-    .unwrap();
-
-    let user2_btc_account_id = sqlx::query_scalar!(
-        "INSERT INTO t_money_accounts (currency, source_type, source_id) VALUES ($1, $2, $3) RETURNING id",
-        "BTC",
-        "user",
-        format!("user:{}", user2_test_id)
-    )
-    .fetch_one(&pg_pool)
-    .await
-    .unwrap();
-
-    sqlx::query!(
-        r#"
-            INSERT INTO t_account_tx_journal
-            (credit_account_id, debit_account_id, currency, amount, transaction_type, txid)
-            VALUES ($1, $2, $3, $4::numeric, $5, $6)
-            "#,
-        user2_usd_account_id,
-        exchange_usd_account_id,
-        "USD",
-        dec!(100_000),
-        "test_deposit",
-        uuid::Uuid::new_v4().to_string()
-    )
-    .execute(&pg_pool)
-    .await
-    .unwrap();
-
-    sqlx::query!(
-        r#"
-            INSERT INTO t_account_tx_journal
-            (credit_account_id, debit_account_id, currency, amount, transaction_type, txid)
-            VALUES ($1, $2, $3, $4::numeric, $5, $6)
-            "#,
-        user2_btc_account_id,
-        exchange_btc_account_id,
-        "BTC",
-        dec!(10),
-        "test_deposit",
-        uuid::Uuid::new_v4().to_string()
-    )
-    .execute(&pg_pool)
-    .await
-    .unwrap();
-
-    let sell_order_json = serde_json::json!({
-        "nonce": 123456793,
-        "type": "sell",
-        "ordertype": "limit",
-        "volume": "0.5",
-        "displayvol": "0.5",
-        "pair": "BTC/USD",
-        "price": "50000"
-    });
+    let user1 = TestUser::random().create(&pg_pool).await;
+    let user2 = TestUser::random().create(&pg_pool).await;
 
     let sell_order = MsgIn::PlaceOrder(PlaceOrderArgs {
         base_quote: (
             AssetCode::from_str_and_vocabulary("BTC", &symbol_vocabulary).unwrap(),
             AssetCode::from_str_and_vocabulary("USD", &symbol_vocabulary).unwrap(),
         ),
-        user_id: user1_id.clone(),
+        user_id: user1.user_id.clone(),
         order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-        order_details: serde_json::from_value(sell_order_json).unwrap(),
+        order_details: OrderTicket::builder(
+            OrderType::Limit,
+            OrderSide::Sell,
+            Price {
+                prefix: None,
+                amount: dec!(50000),
+                is_percentage: false,
+            },
+        )
+        .quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
+        .display_quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
+        .volume(dec!(0.5))
+        .build()
+        .unwrap(),
     });
 
     let resp = {
@@ -133,24 +72,27 @@ async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
         "Event sourcing should record sell order"
     );
 
-    let buy_order_json = serde_json::json!({
-        "nonce": 123456794,
-        "type": "buy",
-        "ordertype": "market",
-        "volume": "0.5",
-        "displayvol": "0.5",
-        "pair": "BTC/USD",
-        "price": "50000"
-    });
-
     let buy_order = MsgIn::PlaceOrder(PlaceOrderArgs {
         base_quote: (
             AssetCode::from_str_and_vocabulary("BTC", &symbol_vocabulary).unwrap(),
             AssetCode::from_str_and_vocabulary("USD", &symbol_vocabulary).unwrap(),
         ),
-        user_id: user2_id.clone(),
+        user_id: user2.user_id.clone(),
         order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-        order_details: serde_json::from_value(buy_order_json).unwrap(),
+        order_details: OrderTicket::builder(
+            OrderType::Market,
+            OrderSide::Buy,
+            Price {
+                prefix: None,
+                amount: dec!(50000),
+                is_percentage: false,
+            },
+        )
+        .quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
+        .display_quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
+        .volume(dec!(0.5))
+        .build()
+        .unwrap(),
     });
 
     let resp = {
@@ -206,7 +148,7 @@ async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
     .unwrap();
 
     assert_eq!(
-        btc_settlement.credit_account_id, user2_btc_account_id,
+        btc_settlement.credit_account_id, user2.btc_account_id,
         "Buyer (user2) should be CREDITED BTC"
     );
     assert_eq!(
@@ -234,7 +176,7 @@ async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
     .unwrap();
 
     assert_eq!(
-        usd_settlement.credit_account_id, user1_usd_account_id,
+        usd_settlement.credit_account_id, user1.usd_account_id,
         "Seller (user1) should be CREDITED USD"
     );
     assert_eq!(
@@ -247,21 +189,7 @@ async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
         "USD settlement amount should be $25,000"
     );
 
-    let user1_btc_balance = sqlx::query_scalar!(
-        r#"
-            SELECT COALESCE(
-                (SELECT SUM(amount) FROM t_account_tx_journal WHERE credit_account_id = $1),
-                0
-            ) - COALESCE(
-                (SELECT SUM(amount) FROM t_account_tx_journal WHERE debit_account_id = $1),
-                0
-            ) as "balance!"
-            "#,
-        user1_btc_account_id
-    )
-    .fetch_one(&pg_pool)
-    .await
-    .unwrap();
+    let user1_btc_balance = user1.balance(&pg_pool, user1.btc_account_id).await;
 
     assert_eq!(
         user1_btc_balance,
@@ -270,21 +198,7 @@ async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
         user1_btc_balance
     );
 
-    let user1_usd_balance = sqlx::query_scalar!(
-        r#"
-            SELECT COALESCE(
-                (SELECT SUM(amount) FROM t_account_tx_journal WHERE credit_account_id = $1),
-                0
-            ) - COALESCE(
-                (SELECT SUM(amount) FROM t_account_tx_journal WHERE debit_account_id = $1),
-                0
-            ) as "balance!"
-            "#,
-        user1_usd_account_id
-    )
-    .fetch_one(&pg_pool)
-    .await
-    .unwrap();
+    let user1_usd_balance = user1.balance(&pg_pool, user1.usd_account_id).await;
 
     assert_eq!(
         user1_usd_balance,
@@ -293,21 +207,7 @@ async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
         user1_usd_balance
     );
 
-    let user2_btc_balance = sqlx::query_scalar!(
-        r#"
-            SELECT COALESCE(
-                (SELECT SUM(amount) FROM t_account_tx_journal WHERE credit_account_id = $1),
-                0
-            ) - COALESCE(
-                (SELECT SUM(amount) FROM t_account_tx_journal WHERE debit_account_id = $1),
-                0
-            ) as "balance!"
-            "#,
-        user2_btc_account_id
-    )
-    .fetch_one(&pg_pool)
-    .await
-    .unwrap();
+    let user2_btc_balance = user2.balance(&pg_pool, user2.btc_account_id).await;
 
     assert_eq!(
         user2_btc_balance,
@@ -316,21 +216,7 @@ async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
         user2_btc_balance
     );
 
-    let user2_usd_balance = sqlx::query_scalar!(
-        r#"
-            SELECT COALESCE(
-                (SELECT SUM(amount) FROM t_account_tx_journal WHERE credit_account_id = $1),
-                0
-            ) - COALESCE(
-                (SELECT SUM(amount) FROM t_account_tx_journal WHERE debit_account_id = $1),
-                0
-            ) as "balance!"
-            "#,
-        user2_usd_account_id
-    )
-    .fetch_one(&pg_pool)
-    .await
-    .unwrap();
+    let user2_usd_balance = user2.balance(&pg_pool, user2.usd_account_id).await;
 
     assert_eq!(
         user2_usd_balance,
