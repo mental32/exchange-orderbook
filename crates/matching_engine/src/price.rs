@@ -181,7 +181,7 @@ impl Price {
         NonZeroDecimal::new(rv).map_err(|()| InvalidPrice)
     }
 
-    pub(crate) fn is_relative(&self) -> bool {
+    pub fn is_relative(&self) -> bool {
         self.prefix.is_some()
     }
 }

@@ -11,26 +11,11 @@ use super::try_fill_order::try_fill_orders;
 use crate::asset_pair::BaseQuote;
 use crate::decimal::Decimal;
 use crate::decimal::NonZeroDecimal;
+use crate::order_ticket::OrderTicket;
 use crate::order_uuid::OrderUuid;
 use crate::orderbook::SelfTradeProtection;
 use crate::orderflags::OrderFlags;
 use crate::price::Price;
-use crate::reserve_money::ReserveByAssetError;
-use common_core::web::middleware::clerk::ClerkUserId;
-
-pub trait OrderDetails: Clone {
-    fn order_side(&self) -> OrderSide;
-    fn quantity(&self) -> Option<NonZeroDecimal>;
-    fn price(&self) -> Price;
-    fn order_type(&self) -> OrderType;
-    fn time_in_force(&self) -> TimeInForce;
-    fn stp(&self) -> SelfTradeProtection;
-    /// For Iceberg orders, returns the display quantity (visible in the book) should return None for non-iceberg orders.
-    fn display_quantity(&self) -> Option<NonZeroDecimal>;
-    fn order_flags(&self) -> OrderFlags;
-    /// User-specified reference number that can be associated with orders
-    fn userref(&self) -> Option<u32>;
-}
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
@@ -82,10 +67,10 @@ pub struct Fill {
 }
 
 /// A pending fill operation on the [`Orderbook`].
-pub struct PendingFill<'a> {
+pub struct PendingFill<'a, TUserId> {
     /// capturing the orderbook by mutable reference enforces that the data in the pending-fill does not drift from the
     /// orderbook data.
-    pub orderbook: &'a mut Orderbook,
+    pub orderbook: &'a mut Orderbook<TUserId>,
     /// The orders that were filled
     pub fills: Vec<Fill>,
     /// The outcome of the fill operation for the taker's order.
@@ -102,184 +87,193 @@ pub enum TifViolation {
     ImmediateOrCancel,
 }
 
-impl<'a> PendingFill<'a> {
+impl<'a, TUserId> PendingFill<'a, TUserId> {
     pub fn has_tif_violation(
         &self,
         order_type: OrderType,
         time_in_force: TimeInForce,
     ) -> Result<(), TifViolation> {
         use OrderType as T;
+        use TimeInForce as F;
 
         let taker_fill_outcome = self.taker_fill_outcome.as_ref();
 
         let tif_violation: Option<TifViolation> =
             match (order_type, time_in_force, taker_fill_outcome) {
-                (T::Limit, TimeInForce::GoodTilCanceled, None) => None,
-                (T::Limit, TimeInForce::GoodTilCanceled, Some(_)) => None,
-                (T::Limit, TimeInForce::GoodTilDate(_date), None) => None,
-                (T::Limit, TimeInForce::GoodTilDate(_date), Some(_)) => None,
-                (T::Limit, TimeInForce::ImmediateOrCancel, None) => {
-                    Some(TifViolation::ImmediateOrCancel)
-                }
-                (T::Limit, TimeInForce::ImmediateOrCancel, Some(fill_type)) => match fill_type {
+                (T::Limit, F::GoodTilCanceled, None) => None,
+                (T::Limit, F::GoodTilCanceled, Some(_)) => None,
+                (T::Limit, F::GoodTilDate(_date), None) => None,
+                (T::Limit, F::GoodTilDate(_date), Some(_)) => None,
+                (T::Limit, F::ImmediateOrCancel, None) => Some(TifViolation::ImmediateOrCancel),
+                (T::Limit, F::ImmediateOrCancel, Some(fill_type)) => match fill_type {
                     FillType::Complete { .. } | FillType::Partial { .. } => None,
                     FillType::Cancelled => Some(TifViolation::ImmediateOrCancel),
                 },
-                (T::Limit, TimeInForce::FillOrKill, None) => Some(TifViolation::FillOrKill),
-                (T::Limit, TimeInForce::FillOrKill, Some(fill_type)) => match fill_type {
+                (T::Limit, F::FillOrKill, None) => Some(TifViolation::FillOrKill),
+                (T::Limit, F::FillOrKill, Some(fill_type)) => match fill_type {
                     FillType::Complete { .. } => None,
                     FillType::Partial { .. } | FillType::Cancelled => {
                         Some(TifViolation::FillOrKill)
                     }
                 },
-                (T::Market, TimeInForce::GoodTilCanceled, None) => {
-                    Some(TifViolation::ImmediateOrCancel)
-                }
-                (T::Market, TimeInForce::GoodTilCanceled, Some(_)) => None,
-                (T::Market, TimeInForce::GoodTilDate(_date), None) => {
-                    Some(TifViolation::ImmediateOrCancel)
-                }
-                (T::Market, TimeInForce::GoodTilDate(_date), Some(_)) => None,
-                (T::Market, TimeInForce::ImmediateOrCancel, None) => {
-                    Some(TifViolation::ImmediateOrCancel)
-                }
-                (T::Market, TimeInForce::ImmediateOrCancel, Some(fill_type)) => match fill_type {
+                (T::Market, F::GoodTilCanceled, None) => Some(TifViolation::ImmediateOrCancel),
+                (T::Market, F::GoodTilCanceled, Some(_)) => None,
+                (T::Market, F::GoodTilDate(_date), None) => Some(TifViolation::ImmediateOrCancel),
+                (T::Market, F::GoodTilDate(_date), Some(_)) => None,
+                (T::Market, F::ImmediateOrCancel, None) => Some(TifViolation::ImmediateOrCancel),
+                (T::Market, F::ImmediateOrCancel, Some(fill_type)) => match fill_type {
                     FillType::Complete { .. } | FillType::Partial { .. } => None,
                     FillType::Cancelled => Some(TifViolation::ImmediateOrCancel),
                 },
-                (T::Market, TimeInForce::FillOrKill, None) => Some(TifViolation::FillOrKill),
-                (T::Market, TimeInForce::FillOrKill, Some(fill_type)) => match fill_type {
+                (T::Market, F::FillOrKill, None) => Some(TifViolation::FillOrKill),
+                (T::Market, F::FillOrKill, Some(fill_type)) => match fill_type {
                     FillType::Complete { .. } => None,
                     FillType::Partial { .. } | FillType::Cancelled => {
                         Some(TifViolation::FillOrKill)
                     }
                 },
-                (T::StopLoss, TimeInForce::GoodTilCanceled, None) => None,
-                (T::StopLoss, TimeInForce::GoodTilCanceled, Some(_)) => None,
-                (T::StopLoss, TimeInForce::GoodTilDate(_date), None) => None,
-                (T::StopLoss, TimeInForce::GoodTilDate(_date), Some(_)) => None,
-                (T::StopLoss, TimeInForce::ImmediateOrCancel, None) => None,
-                (T::StopLoss, TimeInForce::ImmediateOrCancel, Some(fill_type)) => match fill_type {
+                (T::Market, F::GoodTilCanceled, None) => None,
+                (T::Market, F::GoodTilCanceled, Some(_)) => None,
+                (T::Market, F::GoodTilDate(_date), None) => Some(TifViolation::ImmediateOrCancel),
+                (T::Market, F::GoodTilDate(_date), Some(_)) => None,
+                (T::Market, F::ImmediateOrCancel, None) => Some(TifViolation::ImmediateOrCancel),
+                (T::Market, F::ImmediateOrCancel, Some(fill_type)) => match fill_type {
                     FillType::Complete { .. } | FillType::Partial { .. } => None,
                     FillType::Cancelled => Some(TifViolation::ImmediateOrCancel),
                 },
-                (T::StopLoss, TimeInForce::FillOrKill, None) => None,
-                (T::StopLoss, TimeInForce::FillOrKill, Some(fill_type)) => match fill_type {
+                (T::Market, F::FillOrKill, None) => Some(TifViolation::FillOrKill),
+                (T::Market, F::FillOrKill, Some(fill_type)) => match fill_type {
                     FillType::Complete { .. } => None,
                     FillType::Partial { .. } | FillType::Cancelled => {
                         Some(TifViolation::FillOrKill)
                     }
                 },
-                (T::StopLossLimit, TimeInForce::GoodTilCanceled, None) => None,
-                (T::StopLossLimit, TimeInForce::GoodTilCanceled, Some(_)) => None,
-                (T::StopLossLimit, TimeInForce::GoodTilDate(_date), None) => None,
-                (T::StopLossLimit, TimeInForce::GoodTilDate(_date), Some(_)) => None,
-                (T::StopLossLimit, TimeInForce::ImmediateOrCancel, None) => None,
-                (T::StopLossLimit, TimeInForce::ImmediateOrCancel, Some(fill_type)) => {
-                    match fill_type {
-                        FillType::Complete { .. } | FillType::Partial { .. } => None,
-                        FillType::Cancelled => Some(TifViolation::ImmediateOrCancel),
-                    }
-                }
-                (T::StopLossLimit, TimeInForce::FillOrKill, None) => None,
-                (T::StopLossLimit, TimeInForce::FillOrKill, Some(fill_type)) => match fill_type {
-                    FillType::Complete { .. } => None,
-                    FillType::Partial { .. } | FillType::Cancelled => {
-                        Some(TifViolation::FillOrKill)
-                    }
-                },
-                (T::TakeProfit, TimeInForce::FillOrKill, None) => None,
-                (T::TakeProfit, TimeInForce::FillOrKill, Some(fill_type)) => match fill_type {
-                    FillType::Complete { .. } => None,
-                    FillType::Partial { .. } | FillType::Cancelled => {
-                        Some(TifViolation::FillOrKill)
-                    }
-                },
-                (T::TakeProfit, TimeInForce::GoodTilCanceled, None) => None,
-                (T::TakeProfit, TimeInForce::GoodTilCanceled, Some(_)) => None,
-                (T::TakeProfit, TimeInForce::GoodTilDate(_date), None) => None,
-                (T::TakeProfit, TimeInForce::GoodTilDate(_date), Some(_)) => None,
-                (T::TakeProfit, TimeInForce::ImmediateOrCancel, None) => None,
-                (T::TakeProfit, TimeInForce::ImmediateOrCancel, Some(fill_type)) => match fill_type
-                {
+                (T::StopLoss, F::GoodTilCanceled, None) => None,
+                (T::StopLoss, F::GoodTilCanceled, Some(_)) => None,
+                (T::StopLoss, F::GoodTilDate(_date), None) => None,
+                (T::StopLoss, F::GoodTilDate(_date), Some(_)) => None,
+                (T::StopLoss, F::ImmediateOrCancel, None) => None,
+                (T::StopLoss, F::ImmediateOrCancel, Some(fill_type)) => match fill_type {
                     FillType::Complete { .. } | FillType::Partial { .. } => None,
                     FillType::Cancelled => Some(TifViolation::ImmediateOrCancel),
                 },
-                (T::TakeProfit, TimeInForce::FillOrKill, None) => None,
-                (T::TakeProfit, TimeInForce::FillOrKill, Some(fill_type)) => match fill_type {
+                (T::StopLoss, F::FillOrKill, None) => None,
+                (T::StopLoss, F::FillOrKill, Some(fill_type)) => match fill_type {
                     FillType::Complete { .. } => None,
                     FillType::Partial { .. } | FillType::Cancelled => {
                         Some(TifViolation::FillOrKill)
                     }
                 },
-                (T::TakeProfitLimit, TimeInForce::GoodTilCanceled, None) => None,
-                (T::TakeProfitLimit, TimeInForce::GoodTilCanceled, Some(_)) => None,
-                (T::TakeProfitLimit, TimeInForce::GoodTilDate(_date), None) => None,
-                (T::TakeProfitLimit, TimeInForce::GoodTilDate(_date), Some(_)) => None,
-                (T::TakeProfitLimit, TimeInForce::ImmediateOrCancel, None) => None,
-                (T::TakeProfitLimit, TimeInForce::ImmediateOrCancel, Some(fill_type)) => {
-                    match fill_type {
-                        FillType::Complete { .. } | FillType::Partial { .. } => None,
-                        FillType::Cancelled => Some(TifViolation::ImmediateOrCancel),
-                    }
-                }
-                (T::TakeProfitLimit, TimeInForce::FillOrKill, None) => None,
-                (T::TakeProfitLimit, TimeInForce::FillOrKill, Some(fill_type)) => match fill_type {
-                    FillType::Complete { .. } => None,
-                    FillType::Partial { .. } | FillType::Cancelled => {
-                        Some(TifViolation::FillOrKill)
-                    }
-                },
-                (T::TrailingStop, TimeInForce::GoodTilCanceled, None) => None,
-                (T::TrailingStop, TimeInForce::GoodTilCanceled, Some(_)) => None,
-                (T::TrailingStop, TimeInForce::GoodTilDate(_date), None) => None,
-                (T::TrailingStop, TimeInForce::GoodTilDate(_date), Some(_)) => None,
-                (T::TrailingStop, TimeInForce::ImmediateOrCancel, None) => None,
-                (T::TrailingStop, TimeInForce::ImmediateOrCancel, Some(fill_type)) => {
-                    match fill_type {
-                        FillType::Complete { .. } | FillType::Partial { .. } => None,
-                        FillType::Cancelled => Some(TifViolation::ImmediateOrCancel),
-                    }
-                }
-                (T::TrailingStop, TimeInForce::FillOrKill, None) => None,
-                (T::TrailingStop, TimeInForce::FillOrKill, Some(fill_type)) => match fill_type {
-                    FillType::Complete { .. } => None,
-                    FillType::Partial { .. } | FillType::Cancelled => {
-                        Some(TifViolation::FillOrKill)
-                    }
-                },
-                (T::TrailingStopLimit, TimeInForce::GoodTilCanceled, None) => None,
-                (T::TrailingStopLimit, TimeInForce::GoodTilCanceled, Some(_)) => None,
-                (T::TrailingStopLimit, TimeInForce::GoodTilDate(_date), None) => None,
-                (T::TrailingStopLimit, TimeInForce::GoodTilDate(_date), Some(_)) => None,
-                (T::TrailingStopLimit, TimeInForce::ImmediateOrCancel, None) => None,
-                (T::TrailingStopLimit, TimeInForce::ImmediateOrCancel, Some(fill_type)) => {
-                    match fill_type {
-                        FillType::Complete { .. } | FillType::Partial { .. } => None,
-                        FillType::Cancelled => Some(TifViolation::ImmediateOrCancel),
-                    }
-                }
-                (T::TrailingStopLimit, TimeInForce::FillOrKill, None) => None,
-                (T::TrailingStopLimit, TimeInForce::FillOrKill, Some(fill_type)) => match fill_type
-                {
-                    FillType::Complete { .. } => None,
-                    FillType::Partial { .. } | FillType::Cancelled => {
-                        Some(TifViolation::FillOrKill)
-                    }
-                },
-                (T::Iceberg, TimeInForce::GoodTilCanceled, None) => None,
-                (T::Iceberg, TimeInForce::GoodTilCanceled, Some(_)) => None,
-                (T::Iceberg, TimeInForce::GoodTilDate(_date), None) => None,
-                (T::Iceberg, TimeInForce::GoodTilDate(_date), Some(_)) => None,
-                (T::Iceberg, TimeInForce::ImmediateOrCancel, None) => {
-                    Some(TifViolation::ImmediateOrCancel)
-                }
-                (T::Iceberg, TimeInForce::ImmediateOrCancel, Some(fill_type)) => match fill_type {
+                (T::StopLossLimit, F::GoodTilCanceled, None) => None,
+                (T::StopLossLimit, F::GoodTilCanceled, Some(_)) => None,
+                (T::StopLossLimit, F::GoodTilDate(_date), None) => None,
+                (T::StopLossLimit, F::GoodTilDate(_date), Some(_)) => None,
+                (T::StopLossLimit, F::ImmediateOrCancel, None) => None,
+                (T::StopLossLimit, F::ImmediateOrCancel, Some(fill_type)) => match fill_type {
                     FillType::Complete { .. } | FillType::Partial { .. } => None,
                     FillType::Cancelled => Some(TifViolation::ImmediateOrCancel),
                 },
-                (T::Iceberg, TimeInForce::FillOrKill, None) => Some(TifViolation::FillOrKill),
-                (T::Iceberg, TimeInForce::FillOrKill, Some(fill_type)) => match fill_type {
+                (T::StopLossLimit, F::FillOrKill, None) => None,
+                (T::StopLossLimit, F::FillOrKill, Some(fill_type)) => match fill_type {
+                    FillType::Complete { .. } => None,
+                    FillType::Partial { .. } | FillType::Cancelled => {
+                        Some(TifViolation::FillOrKill)
+                    }
+                },
+                (T::TakeProfit, F::FillOrKill, None) => None,
+                (T::TakeProfit, F::FillOrKill, Some(fill_type)) => match fill_type {
+                    FillType::Complete { .. } => None,
+                    FillType::Partial { .. } | FillType::Cancelled => {
+                        Some(TifViolation::FillOrKill)
+                    }
+                },
+                (T::TakeProfit, F::GoodTilCanceled, None) => None,
+                (T::TakeProfit, F::GoodTilCanceled, Some(_)) => None,
+                (T::TakeProfit, F::GoodTilDate(_date), None) => None,
+                (T::TakeProfit, F::GoodTilDate(_date), Some(_)) => None,
+                (T::TakeProfit, F::ImmediateOrCancel, None) => None,
+                (T::TakeProfit, F::ImmediateOrCancel, Some(fill_type)) => match fill_type {
+                    FillType::Complete { .. } | FillType::Partial { .. } => None,
+                    FillType::Cancelled => Some(TifViolation::ImmediateOrCancel),
+                },
+                (T::TakeProfit, F::FillOrKill, None) => None,
+                (T::TakeProfit, F::FillOrKill, Some(fill_type)) => match fill_type {
+                    FillType::Complete { .. } => None,
+                    FillType::Partial { .. } | FillType::Cancelled => {
+                        Some(TifViolation::FillOrKill)
+                    }
+                },
+                (T::TakeProfitLimit, F::GoodTilCanceled, None) => None,
+                (T::TakeProfitLimit, F::GoodTilCanceled, Some(_)) => None,
+                (T::TakeProfitLimit, F::GoodTilDate(_date), None) => None,
+                (T::TakeProfitLimit, F::GoodTilDate(_date), Some(_)) => None,
+                (T::TakeProfitLimit, F::ImmediateOrCancel, None) => None,
+                (T::TakeProfitLimit, F::ImmediateOrCancel, Some(fill_type)) => match fill_type {
+                    FillType::Complete { .. } | FillType::Partial { .. } => None,
+                    FillType::Cancelled => Some(TifViolation::ImmediateOrCancel),
+                },
+                (T::TakeProfitLimit, F::FillOrKill, None) => None,
+                (T::TakeProfitLimit, F::FillOrKill, Some(fill_type)) => match fill_type {
+                    FillType::Complete { .. } => None,
+                    FillType::Partial { .. } | FillType::Cancelled => {
+                        Some(TifViolation::FillOrKill)
+                    }
+                },
+                (T::TrailingStop, F::ImmediateOrCancel, None) => None,
+                (T::TrailingStop, F::ImmediateOrCancel, Some(fill_type)) => match fill_type {
+                    FillType::Complete { .. } | FillType::Partial { .. } => None,
+                    FillType::Cancelled => Some(TifViolation::ImmediateOrCancel),
+                },
+                (T::TrailingStop, F::FillOrKill, None) => None,
+                (T::TrailingStop, F::FillOrKill, Some(fill_type)) => match fill_type {
+                    FillType::Complete { .. } => None,
+                    FillType::Partial { .. } | FillType::Cancelled => {
+                        Some(TifViolation::FillOrKill)
+                    }
+                },
+                (T::TrailingStop, F::GoodTilCanceled, None) => None,
+                (T::TrailingStop, F::GoodTilCanceled, Some(_)) => None,
+                (T::TrailingStop, F::GoodTilDate(_date), None) => None,
+                (T::TrailingStop, F::GoodTilDate(_date), Some(_)) => None,
+                (T::TrailingStop, F::ImmediateOrCancel, None) => None,
+                (T::TrailingStop, F::ImmediateOrCancel, Some(fill_type)) => match fill_type {
+                    FillType::Complete { .. } | FillType::Partial { .. } => None,
+                    FillType::Cancelled => Some(TifViolation::ImmediateOrCancel),
+                },
+                (T::TrailingStop, F::FillOrKill, None) => None,
+                (T::TrailingStop, F::FillOrKill, Some(fill_type)) => match fill_type {
+                    FillType::Complete { .. } => None,
+                    FillType::Partial { .. } | FillType::Cancelled => {
+                        Some(TifViolation::FillOrKill)
+                    }
+                },
+                (T::TrailingStopLimit, F::GoodTilCanceled, None) => None,
+                (T::TrailingStopLimit, F::GoodTilCanceled, Some(_)) => None,
+                (T::TrailingStopLimit, F::GoodTilDate(_date), None) => None,
+                (T::TrailingStopLimit, F::GoodTilDate(_date), Some(_)) => None,
+                (T::TrailingStopLimit, F::ImmediateOrCancel, None) => None,
+                (T::TrailingStopLimit, F::ImmediateOrCancel, Some(fill_type)) => match fill_type {
+                    FillType::Complete { .. } | FillType::Partial { .. } => None,
+                    FillType::Cancelled => Some(TifViolation::ImmediateOrCancel),
+                },
+                (T::TrailingStopLimit, F::FillOrKill, None) => None,
+                (T::TrailingStopLimit, F::FillOrKill, Some(fill_type)) => match fill_type {
+                    FillType::Complete { .. } => None,
+                    FillType::Partial { .. } | FillType::Cancelled => {
+                        Some(TifViolation::FillOrKill)
+                    }
+                },
+                (T::Iceberg, F::GoodTilCanceled, None) => None,
+                (T::Iceberg, F::GoodTilCanceled, Some(_)) => None,
+                (T::Iceberg, F::GoodTilDate(_date), None) => None,
+                (T::Iceberg, F::GoodTilDate(_date), Some(_)) => None,
+                (T::Iceberg, F::ImmediateOrCancel, None) => Some(TifViolation::ImmediateOrCancel),
+                (T::Iceberg, F::ImmediateOrCancel, Some(fill_type)) => match fill_type {
+                    FillType::Complete { .. } | FillType::Partial { .. } => None,
+                    FillType::Cancelled => Some(TifViolation::ImmediateOrCancel),
+                },
+                (T::Iceberg, F::FillOrKill, None) => Some(TifViolation::FillOrKill),
+                (T::Iceberg, F::FillOrKill, Some(fill_type)) => match fill_type {
                     FillType::Complete { .. } => None,
                     FillType::Partial { .. } | FillType::Cancelled => {
                         Some(TifViolation::FillOrKill)
@@ -304,10 +298,7 @@ impl<'a> PendingFill<'a> {
             .sum()
     }
 
-    pub fn match_events<D>(&self, order_uuid: OrderUuid, details: D) -> Vec<MatchEvent>
-    where
-        D: OrderDetails,
-    {
+    pub fn match_events(&self, order_uuid: OrderUuid, details: OrderTicket) -> Vec<MatchEvent> {
         let mut events: Vec<MatchEvent> = self
             .fills
             .iter()
@@ -337,7 +328,7 @@ impl<'a> PendingFill<'a> {
                     events.push(MatchEvent::Trade {
                         aggregate_filled_quantity: quantity,
                         taker_order_id: order_uuid,
-                        order_side: details.order_side(),
+                        order_side: details.side,
                         taker_fully_filled: true,
                         // trades: pending_fill.fills,
                     });
@@ -346,14 +337,14 @@ impl<'a> PendingFill<'a> {
                     events.push(MatchEvent::Trade {
                         aggregate_filled_quantity: amount_filled,
                         taker_order_id: order_uuid,
-                        order_side: details.order_side(),
+                        order_side: details.side,
                         taker_fully_filled: false,
                         // trades: pending_fill.fills,
                     });
                 }
                 FillType::Cancelled => events.push(MatchEvent::Reject {
-                    amount_rejected: details.quantity().unwrap(),
-                    price: details.price(),
+                    amount_rejected: details.quantity.unwrap(),
+                    price: details.price,
                     order_id: order_uuid,
                 }),
             }
@@ -366,7 +357,7 @@ impl<'a> PendingFill<'a> {
         std::mem::drop(self); // included call to drop for clarity
     }
 
-    pub fn commit(self) -> &'a mut Orderbook {
+    pub fn commit(self) -> &'a mut Orderbook<TUserId> {
         assert!(
             self.fills
                 .iter()
@@ -454,61 +445,9 @@ mod tests {
     use crate::decimal::Decimal;
     use crate::order_uuid::OrderUuid;
     use crate::orderbook::Orderbook;
+    use crate::price::Price;
     use crate::try_fill_order::try_fill_orders;
     use std::str::FromStr;
-
-    // Test helper struct that implements OrderDetails
-    #[derive(Clone)]
-    struct TestOrder {
-        side: OrderSide,
-        order_type: OrderType,
-        price: Decimal,
-        quantity: Decimal,
-        time_in_force: TimeInForce,
-        stp: SelfTradeProtection,
-    }
-
-    impl OrderDetails for TestOrder {
-        fn order_side(&self) -> OrderSide {
-            self.side
-        }
-
-        fn quantity(&self) -> Option<NonZeroDecimal> {
-            NonZeroDecimal::new(self.quantity).ok()
-        }
-
-        fn price(&self) -> Price {
-            Price {
-                prefix: None,
-                amount: self.price,
-                is_percentage: false,
-            }
-        }
-
-        fn order_type(&self) -> OrderType {
-            self.order_type
-        }
-
-        fn time_in_force(&self) -> TimeInForce {
-            self.time_in_force
-        }
-
-        fn stp(&self) -> SelfTradeProtection {
-            self.stp
-        }
-
-        fn display_quantity(&self) -> Option<NonZeroDecimal> {
-            None
-        }
-
-        fn order_flags(&self) -> OrderFlags {
-            OrderFlags::default()
-        }
-
-        fn userref(&self) -> Option<u32> {
-            None
-        }
-    }
 
     #[test]
     fn test_ioc_partial_fill_succeeds() {
@@ -516,34 +455,44 @@ mod tests {
 
         // Only 30 units available, but taker wants 50
         {
-            let orderbook: &mut Orderbook = &mut orderbook;
-            let price = Decimal::from_str("100").unwrap();
+            let orderbook = &mut orderbook;
+            let price = Price {
+                prefix: None,
+                amount: Decimal::from_str("100").unwrap(),
+                is_percentage: false,
+            };
             let quantity = Decimal::from_str("30").unwrap();
             let order_id = OrderUuid(uuid::Uuid::new_v4());
-            let user_id = common_core::web::middleware::clerk::ClerkUserId("test_user".to_string());
-            let order = TestOrder {
-                side: OrderSide::Sell,
-                order_type: OrderType::Limit,
-                price,
-                quantity,
-                time_in_force: TimeInForce::GoodTilCanceled,
-                stp: SelfTradeProtection::CancelNewest,
-            };
-            let price_nz = NonZeroDecimal::new(price).unwrap();
+            let user_id = "test_user".to_owned();
+            let order = OrderTicket::builder(OrderType::Limit, OrderSide::Sell, price)
+                .quantity(quantity.into())
+                .time_in_force(TimeInForce::GoodTilCanceled)
+                .stp(SelfTradeProtection::CancelNewest)
+                .build()
+                .unwrap();
+            let price_nz = NonZeroDecimal::new(price.amount).unwrap();
             orderbook.insert(price_nz, order_id, user_id, order);
         };
 
-        let taker = TestOrder {
-            side: OrderSide::Buy,
-            order_type: OrderType::Limit,
-            price: Decimal::from_str("100").unwrap(),
-            quantity: Decimal::from_str("50").unwrap(),
-            time_in_force: TimeInForce::ImmediateOrCancel, // IOC allows partial fills
-            stp: SelfTradeProtection::CancelBoth,
+        let taker_price = Price {
+            prefix: None,
+            amount: Decimal::from_str("100").unwrap(),
+            is_percentage: false,
         };
+        let taker = OrderTicket::builder(OrderType::Limit, OrderSide::Buy, taker_price)
+            .quantity(Decimal::from_str("50").unwrap().into())
+            .time_in_force(TimeInForce::ImmediateOrCancel) // IOC allows partial fills
+            .stp(SelfTradeProtection::CancelBoth)
+            .build()
+            .unwrap();
 
-        let pending_fill =
-            try_fill_orders(&mut orderbook, &taker, taker.price.into(), None).unwrap();
+        let pending_fill = try_fill_orders(
+            &mut orderbook,
+            &taker,
+            NonZeroDecimal::new(taker.price.amount).unwrap(),
+            None,
+        )
+        .unwrap();
 
         // Verify it's a partial fill
         assert!(matches!(
@@ -552,7 +501,7 @@ mod tests {
         ));
 
         // Create vocabulary and asset codes properly
-        let vocab: SymbolVocabulary = vec!["BTC".to_string(), "USD".to_string()]
+        let vocab: SymbolVocabulary = vec!["BTC".to_owned(), "USD".to_owned()]
             .into_iter()
             .collect();
         let btc = AssetCode::from_str_and_vocabulary("BTC", &vocab).unwrap();
@@ -571,34 +520,44 @@ mod tests {
 
         // Only 30 units available, but taker wants 50
         {
-            let orderbook: &mut Orderbook = &mut orderbook;
-            let price = Decimal::from_str("100").unwrap();
+            let orderbook = &mut orderbook;
+            let price = Price {
+                prefix: None,
+                amount: Decimal::from_str("100").unwrap(),
+                is_percentage: false,
+            };
             let quantity = Decimal::from_str("30").unwrap();
             let order_id = OrderUuid(uuid::Uuid::new_v4());
-            let user_id = common_core::web::middleware::clerk::ClerkUserId("test_user".to_string());
-            let order = TestOrder {
-                side: OrderSide::Sell,
-                order_type: OrderType::Limit,
-                price,
-                quantity,
-                time_in_force: TimeInForce::GoodTilCanceled,
-                stp: SelfTradeProtection::CancelNewest,
-            };
-            let price_nz = NonZeroDecimal::new(price).unwrap();
+            let user_id = "test_user".to_owned();
+            let order = OrderTicket::builder(OrderType::Limit, OrderSide::Sell, price)
+                .quantity(quantity.into())
+                .time_in_force(TimeInForce::GoodTilCanceled)
+                .stp(SelfTradeProtection::CancelNewest)
+                .build()
+                .unwrap();
+            let price_nz = NonZeroDecimal::new(price.amount).unwrap();
             orderbook.insert(price_nz, order_id, user_id, order);
         };
 
-        let taker = TestOrder {
-            side: OrderSide::Buy,
-            order_type: OrderType::Limit,
-            price: Decimal::from_str("100").unwrap(),
-            quantity: Decimal::from_str("50").unwrap(),
-            time_in_force: TimeInForce::FillOrKill, // FOK requires complete fill
-            stp: SelfTradeProtection::CancelBoth,
+        let taker_price = Price {
+            prefix: None,
+            amount: Decimal::from_str("100").unwrap(),
+            is_percentage: false,
         };
+        let taker = OrderTicket::builder(OrderType::Limit, OrderSide::Buy, taker_price)
+            .quantity(Decimal::from_str("50").unwrap().into())
+            .time_in_force(TimeInForce::FillOrKill) // FOK requires complete fill
+            .stp(SelfTradeProtection::CancelBoth)
+            .build()
+            .unwrap();
 
-        let pending_fill =
-            try_fill_orders(&mut orderbook, &taker, taker.price.into(), None).unwrap();
+        let pending_fill = try_fill_orders(
+            &mut orderbook,
+            &taker,
+            NonZeroDecimal::new(taker.price.amount).unwrap(),
+            None,
+        )
+        .unwrap();
 
         // Verify it's a partial fill
         assert!(matches!(
@@ -607,7 +566,7 @@ mod tests {
         ));
 
         // Create vocabulary and asset codes properly
-        let vocab: SymbolVocabulary = vec!["BTC".to_string(), "USD".to_string()]
+        let vocab: SymbolVocabulary = vec!["BTC".to_owned(), "USD".to_owned()]
             .into_iter()
             .collect();
         let btc = AssetCode::from_str_and_vocabulary("BTC", &vocab).unwrap();

@@ -1,14 +1,11 @@
 //! The orderbook module contains the data structures and logic for the orderbook.
 use crate::decimal::NonZeroDecimal;
+use crate::order_ticket::OrderTicket;
 use crate::order_uuid::OrderUuid;
-use crate::pending_fill::OrderDetails;
-use common_core::web::middleware::clerk::ClerkUserId; // XXX: not sure how i feel about coupling user id with clerk
-use std::u32;
 
 /// Side of an order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[repr(u8)] // XXX: repr(u8) could be pre-mature optimisation.
 pub enum OrderSide {
     /// Buy/"Bid"
     #[serde(rename = "buy")]
@@ -49,57 +46,6 @@ pub enum OrderType {
     /// Hides the full order size by only showing your chosen display size in the book at your limit price.
     #[cfg_attr(feature = "serde", serde(rename = "iceberg"))]
     Iceberg,
-}
-
-#[cfg_attr(test, test)]
-#[cfg_attr(not(test), allow(dead_code))]
-fn test_de_order_type() {
-    #[derive(Debug, PartialEq, serde::Deserialize)]
-    struct Shim {
-        t: OrderType,
-    }
-
-    macro_rules! d {
-        ($string:literal) => {
-            ::serde_json::from_str::<Shim>($string).unwrap()
-        };
-    }
-    assert_eq!(
-        d!("{\"t\": \"limit\"}"),
-        Shim {
-            t: OrderType::Limit
-        }
-    );
-    assert_eq!(
-        d!("{\"t\": \"take-profit\"}"),
-        Shim {
-            t: OrderType::TakeProfit
-        }
-    );
-    assert_eq!(
-        d!("{\"t\": \"take-profit-limit\"}"),
-        Shim {
-            t: OrderType::TakeProfitLimit
-        }
-    );
-    assert_eq!(
-        d!("{\"t\": \"trailing-stop\"}"),
-        Shim {
-            t: OrderType::TrailingStop
-        }
-    );
-    assert_eq!(
-        d!("{\"t\": \"trailing-stop-limit\"}"),
-        Shim {
-            t: OrderType::TrailingStopLimit
-        }
-    );
-    assert_eq!(
-        d!("{\"t\": \"iceberg\"}"),
-        Shim {
-            t: OrderType::Iceberg
-        }
-    );
 }
 
 /// The self-trade protection of an order.
@@ -150,47 +96,46 @@ impl Default for TimeInForce {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub(crate) struct OrderData {
+pub struct OrderData<TUserId> {
     /// A distinct number for this bit of data.
     pub timestamp: u32,
     /// Price at which the order is placed.
     pub price: NonZeroDecimal,
     /// unfilled part of the position
     pub remaining_quantity: NonZeroDecimal,
+    /// filled part of the position
+    pub filled_quantity: crate::decimal::Decimal,
     /// The unique identifier for the order.
     pub order_id: OrderUuid,
     /// For Iceberg orders: the visible quantity in the book (None for regular orders)
     pub display_quantity: Option<NonZeroDecimal>,
     /// User ID of the order owner (for self-trade protection)
-    pub user_id: ClerkUserId,
+    pub user_id: TUserId,
     /// userref is
     pub userref: Option<u32>,
 }
 
 /// Price-level aggregation storing multiple price levels in one contiguous array.
-struct MultiplePriceLevels {
+struct MultiplePriceLevels<TUserId> {
     counter: u32,
     /// All resting orders in the book in one contiguous array.
-    orders: Vec<OrderData>,
+    orders: Vec<OrderData<TUserId>>,
 }
 
-impl MultiplePriceLevels {
+impl<TUserId> MultiplePriceLevels<TUserId> {
     /// insert the order into its price level range in the book
     #[track_caller]
-    fn insert_order<D>(
+    fn insert_order(
         &mut self,
         price: NonZeroDecimal,
         order_id: OrderUuid,
-        user_id: ClerkUserId,
-        details: D,
-    ) -> (usize, u32)
-    where
-        D: OrderDetails,
-    {
+        user_id: TUserId,
+        details: OrderTicket,
+    ) -> (usize, u32) {
         let remaining_quantity = details
-            .quantity()
+            .quantity
             .expect("invariant: quantity must be non-zero and checked before inserting");
-        let display_quantity = details.display_quantity();
+        let display_quantity = details.display_quantity;
 
         // invariant: display_quantity must not exceed remaining_quantity
         if let Some(display_qty) = display_quantity {
@@ -211,7 +156,7 @@ impl MultiplePriceLevels {
         self.counter += 1;
 
         match self.orders.binary_search_by(
-            |probe: &OrderData| {
+            |probe: &OrderData<TUserId>| {
                 probe
                     .price
                     .cmp(&price)
@@ -228,10 +173,11 @@ impl MultiplePriceLevels {
                         timestamp: timestamp,
                         price,
                         remaining_quantity,
+                        filled_quantity: crate::decimal::Decimal::ZERO,
                         order_id,
                         display_quantity,
                         user_id,
-                        userref: details.userref(),
+                        userref: details.userref,
                     },
                 );
 
@@ -257,7 +203,11 @@ impl MultiplePriceLevels {
         }
     }
 
-    fn remove_order(&mut self, price: NonZeroDecimal, timestamp: u32) -> Option<OrderData> {
+    fn remove_order(
+        &mut self,
+        price: NonZeroDecimal,
+        timestamp: u32,
+    ) -> Option<OrderData<TUserId>> {
         if let Ok(index) = self.orders.binary_search_by(|probe| {
             probe
                 .price
@@ -270,7 +220,7 @@ impl MultiplePriceLevels {
         }
     }
 
-    fn get(&self, price: NonZeroDecimal, timestamp: u32) -> Option<&OrderData> {
+    fn get(&self, price: NonZeroDecimal, timestamp: u32) -> Option<&OrderData<TUserId>> {
         if let Ok(index) = self.orders.binary_search_by(|probe| {
             probe
                 .price
@@ -283,7 +233,11 @@ impl MultiplePriceLevels {
         }
     }
 
-    fn get_mut(&mut self, price: NonZeroDecimal, timestamp: u32) -> Option<&mut OrderData> {
+    fn get_mut(
+        &mut self,
+        price: NonZeroDecimal,
+        timestamp: u32,
+    ) -> Option<&mut OrderData<TUserId>> {
         if let Ok(index) = self.orders.binary_search_by(|probe| {
             probe
                 .price
@@ -307,14 +261,14 @@ pub struct OrderIndex {
 }
 
 /// Central Limit Order Book storing orders in price-time priority (price levels with FIFO ordering within each level)
-pub struct Orderbook {
+pub struct Orderbook<TUserId> {
     /// bids side of the book
-    bids: MultiplePriceLevels,
+    bids: MultiplePriceLevels<TUserId>,
     /// asks side of the book
-    asks: MultiplePriceLevels,
+    asks: MultiplePriceLevels<TUserId>,
 }
 
-impl Orderbook {
+impl<TUserId> Orderbook<TUserId> {
     pub fn new_empty() -> Self {
         let bids = MultiplePriceLevels {
             orders: vec![],
@@ -327,17 +281,14 @@ impl Orderbook {
         Self { bids, asks }
     }
 
-    pub fn insert<D>(
+    pub fn insert(
         &mut self,
         price: NonZeroDecimal,
         order_id: OrderUuid,
-        user_id: ClerkUserId,
-        details: D,
-    ) -> OrderIndex
-    where
-        D: OrderDetails,
-    {
-        let side = details.order_side();
+        user_id: TUserId,
+        details: OrderTicket,
+    ) -> OrderIndex {
+        let side = details.side;
         let levels = match side {
             OrderSide::Buy => &mut self.bids,
             OrderSide::Sell => &mut self.asks,
@@ -351,7 +302,70 @@ impl Orderbook {
         }
     }
 
-    pub(crate) fn remove(&mut self, order_index: OrderIndex) -> Option<OrderData> {
+    /// Insert an amended order with preserved filled_quantity
+    pub fn insert_amended(
+        &mut self,
+        side: OrderSide,
+        price: NonZeroDecimal,
+        order_id: OrderUuid,
+        user_id: TUserId,
+        remaining_quantity: NonZeroDecimal,
+        filled_quantity: crate::decimal::Decimal,
+        display_quantity: Option<NonZeroDecimal>,
+        userref: Option<u32>,
+    ) -> OrderIndex {
+        let levels = match side {
+            OrderSide::Buy => &mut self.bids,
+            OrderSide::Sell => &mut self.asks,
+        };
+
+        // Display quantity validation
+        if let Some(display_qty) = display_quantity {
+            assert!(
+                display_qty <= remaining_quantity,
+                "display_quantity cannot exceed remaining_quantity"
+            );
+        }
+
+        // Get new timestamp
+        assert!(levels.counter < u32::MAX, "timestamp counter overflow");
+        let timestamp = levels.counter + 1;
+        levels.counter += 1;
+
+        // Find insertion point
+        let index = levels
+            .orders
+            .binary_search_by(|probe: &OrderData<TUserId>| {
+                probe
+                    .price
+                    .cmp(&price)
+                    .then(probe.timestamp.cmp(&timestamp))
+            })
+            .unwrap_err(); // Should always be Err since timestamp is unique
+
+        // Insert the order
+        levels.orders.insert(
+            index,
+            OrderData {
+                timestamp,
+                price,
+                remaining_quantity,
+                filled_quantity,
+                order_id,
+                display_quantity,
+                user_id,
+                userref,
+            },
+        );
+
+        OrderIndex {
+            side,
+            price,
+            timestamp,
+        }
+    }
+
+    pub fn remove(&mut self, order_index: OrderIndex) -> Option<OrderData<TUserId>> {
         let OrderIndex {
             side,
             price,
@@ -366,7 +380,7 @@ impl Orderbook {
         levels.remove_order(price, timestamp)
     }
 
-    pub(crate) fn get(&self, order_index: OrderIndex) -> Option<&OrderData> {
+    pub fn get(&self, order_index: OrderIndex) -> Option<&OrderData<TUserId>> {
         let OrderIndex {
             side,
             price,
@@ -381,7 +395,7 @@ impl Orderbook {
         levels.get(price, timestamp)
     }
 
-    pub(crate) fn get_mut(&mut self, order_index: OrderIndex) -> Option<&mut OrderData> {
+    pub fn get_mut(&mut self, order_index: OrderIndex) -> Option<&mut OrderData<TUserId>> {
         let OrderIndex {
             side,
             price,
@@ -396,12 +410,24 @@ impl Orderbook {
         levels.get_mut(price, timestamp)
     }
 
-    pub(crate) fn bids(&self) -> std::iter::Enumerate<std::slice::Iter<'_, OrderData>> {
-        self.bids.orders.iter().enumerate()
+    pub fn bids(
+        &self,
+    ) -> std::iter::Rev<std::iter::Enumerate<std::slice::Iter<'_, OrderData<TUserId>>>> {
+        self.bids.orders.iter().enumerate().rev()
     }
 
-    pub(crate) fn asks(&self) -> std::iter::Enumerate<std::slice::Iter<'_, OrderData>> {
+    pub fn asks(&self) -> std::iter::Enumerate<std::slice::Iter<'_, OrderData<TUserId>>> {
         self.asks.orders.iter().enumerate()
+    }
+
+    /// Get the best (lowest) ask price, if any orders exist on the ask side
+    pub fn best_ask_price(&self) -> Option<NonZeroDecimal> {
+        self.asks.orders.first().map(|order| order.price)
+    }
+
+    /// Get the best (highest) bid price, if any orders exist on the bid side
+    pub fn best_bid_price(&self) -> Option<NonZeroDecimal> {
+        self.bids.orders.last().map(|order| order.price)
     }
 
     /// construct an iterator of the side of the book specified, the ordering is relative depending on the side specified.
@@ -409,11 +435,11 @@ impl Orderbook {
     /// * [`OrderSide::Buy`] - highest price to lowest (for selling)
     /// * [`OrderSide::Sell`] - lowest price to highest (for buying)
     ///
-    pub(crate) fn iter_rel(
+    pub(crate) fn iter_for_limit_relative(
         &self,
         side: OrderSide,
         limit_price: NonZeroDecimal,
-    ) -> impl Iterator<Item = (usize, &OrderData)> + '_ {
+    ) -> impl Iterator<Item = (usize, &OrderData<TUserId>)> + '_ {
         enum Either<L, R> {
             Left(L),
             Right(R),
@@ -455,5 +481,60 @@ impl Orderbook {
                 self.asks.orders[..limit_end].iter().enumerate()
             }),
         }
+    }
+}
+
+#[cfg(all(feature = "serde", test))]
+mod test_serde {
+    use super::*;
+
+    #[test]
+    fn test_de_order_type() {
+        #[derive(Debug, PartialEq, serde::Deserialize)]
+        struct Shim {
+            t: OrderType,
+        }
+
+        macro_rules! d {
+            ($string:literal) => {
+                ::serde_json::from_str::<Shim>($string).unwrap()
+            };
+        }
+        assert_eq!(
+            d!("{\"t\": \"limit\"}"),
+            Shim {
+                t: OrderType::Limit
+            }
+        );
+        assert_eq!(
+            d!("{\"t\": \"take-profit\"}"),
+            Shim {
+                t: OrderType::TakeProfit
+            }
+        );
+        assert_eq!(
+            d!("{\"t\": \"take-profit-limit\"}"),
+            Shim {
+                t: OrderType::TakeProfitLimit
+            }
+        );
+        assert_eq!(
+            d!("{\"t\": \"trailing-stop\"}"),
+            Shim {
+                t: OrderType::TrailingStop
+            }
+        );
+        assert_eq!(
+            d!("{\"t\": \"trailing-stop-limit\"}"),
+            Shim {
+                t: OrderType::TrailingStopLimit
+            }
+        );
+        assert_eq!(
+            d!("{\"t\": \"iceberg\"}"),
+            Shim {
+                t: OrderType::Iceberg
+            }
+        );
     }
 }

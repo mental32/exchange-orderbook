@@ -5,11 +5,10 @@ use super::pending_fill::FillType;
 use super::pending_fill::PendingFill;
 use crate::decimal::Decimal;
 use crate::decimal::NonZeroDecimal;
+use crate::order_ticket::OrderTicket;
 use crate::orderbook::OrderIndex;
 use crate::orderbook::SelfTradeProtection;
 use crate::pending_fill::Fill;
-use crate::pending_fill::OrderDetails;
-use common_core::web::middleware::clerk::ClerkUserId;
 use std::convert::Infallible;
 
 /// An error that can occur when attempting to fill orders.
@@ -21,61 +20,64 @@ pub enum TryFillOrdersError {
 }
 
 /// generate fills for the incoming order but do not modify the orderbook
-pub fn try_fill_orders<'ob, D>(
-    orderbook: &'ob mut Orderbook,
-    details: &D,
+pub fn try_fill_orders<'ob, TUserId>(
+    orderbook: &'ob mut Orderbook<TUserId>,
+    details: &OrderTicket,
     taker_price: NonZeroDecimal,
-    taker_user_id: Option<&ClerkUserId>,
-) -> Result<PendingFill<'ob>, TryFillOrdersError>
+    taker_user_id: Option<&TUserId>,
+) -> Result<PendingFill<'ob, TUserId>, TryFillOrdersError>
 where
-    D: OrderDetails,
+    TUserId: PartialEq,
 {
     let mut fills = vec![];
     let mut taker_fill_outcome = None;
     let mut taker_filled_qty = crate::decimal::Decimal::ZERO;
 
-    let taker_side = details.order_side();
-    let taker_quantity = details.quantity().ok_or(TryFillOrdersError::ZeroQuantity)?;
+    let taker_side = details.side;
+    let taker_quantity = details.quantity.ok_or(TryFillOrdersError::ZeroQuantity)?;
     let maker_side = match taker_side {
         OrderSide::Buy => OrderSide::Sell,
         OrderSide::Sell => OrderSide::Buy,
     };
 
-    enum Either<L, R> {
-        Left(L),
-        Right(R),
+    enum Either<T, U, V> {
+        First(T),
+        Second(U),
+        Third(V),
     }
 
-    impl<L, R> Iterator for Either<L, R>
+    impl<L, R, V> Iterator for Either<L, R, V>
     where
         L: Iterator,
         R: Iterator<Item = L::Item>,
+        V: Iterator<Item = L::Item>,
     {
         type Item = L::Item;
 
         fn next(&mut self) -> Option<Self::Item> {
             match self {
-                Either::Left(l) => l.next(),
-                Either::Right(r) => r.next(),
+                Either::First(l) => l.next(),
+                Either::Second(r) => r.next(),
+                Either::Third(s) => s.next(),
             }
         }
     }
 
-    let it = if details.order_type() == OrderType::Limit {
-        Either::Left(orderbook.iter_rel(maker_side, taker_price))
+    let it = if details.order_type == OrderType::Limit {
+        Either::First(orderbook.iter_for_limit_relative(maker_side, taker_price))
     } else {
-        assert_eq!(details.order_type(), OrderType::Market);
-        Either::Right(match maker_side {
-            OrderSide::Buy => orderbook.bids(),
-            OrderSide::Sell => orderbook.asks(),
-        })
+        assert_eq!(details.order_type, OrderType::Market);
+        match maker_side {
+            OrderSide::Buy => Either::Second(orderbook.bids()),
+            OrderSide::Sell => Either::Third(orderbook.asks()),
+        }
     };
 
     for (ix, resting_order) in it {
         // Self-Trade Protection: skip own orders based on STP settings
         if let (Some(taker_id), Some(resting_id)) = (taker_user_id, Some(&resting_order.user_id)) {
             if taker_id == resting_id {
-                match details.stp() {
+                match details.stp {
                     SelfTradeProtection::CancelNewest => {
                         // Cancel the taker order by setting outcome to Cancelled
                         taker_fill_outcome = Some(FillType::Cancelled);
@@ -206,99 +208,71 @@ mod tests {
     use crate::orderbook::Orderbook;
     use crate::orderbook::SelfTradeProtection;
     use crate::orderbook::TimeInForce;
-    use crate::orderflags::OrderFlags;
     use crate::pending_fill::FillType;
-    use crate::pending_fill::OrderDetails;
     use crate::price::Price;
     use std::str::FromStr;
 
-    // Test helper struct that implements OrderDetails
-    #[derive(Clone)]
-    struct TestOrder {
-        side: OrderSide,
-        order_type: OrderType,
-        price: Decimal,
-        quantity: Decimal,
-        time_in_force: TimeInForce,
-        stp: SelfTradeProtection,
-        display_quantity: Option<Decimal>,
+    fn abs_price(value: &str) -> Price {
+        Price {
+            prefix: None,
+            amount: Decimal::from_str(value).unwrap(),
+            is_percentage: false,
+        }
     }
 
-    impl OrderDetails for TestOrder {
-        fn order_side(&self) -> OrderSide {
-            self.side
+    fn build_order(
+        order_type: OrderType,
+        side: OrderSide,
+        price: Price,
+        quantity: Option<&str>,
+        time_in_force: TimeInForce,
+        stp: SelfTradeProtection,
+    ) -> OrderTicket {
+        let mut builder = OrderTicket::builder(order_type, side, price)
+            .time_in_force(time_in_force)
+            .stp(stp);
+        if let Some(q) = quantity {
+            builder = builder.quantity(Decimal::from_str(q).unwrap().into());
         }
-
-        fn quantity(&self) -> Option<NonZeroDecimal> {
-            NonZeroDecimal::new(self.quantity).ok()
-        }
-
-        fn price(&self) -> Price {
-            Price {
-                prefix: None,
-                amount: self.price,
-                is_percentage: false,
-            }
-        }
-
-        fn order_type(&self) -> OrderType {
-            self.order_type
-        }
-
-        fn time_in_force(&self) -> TimeInForce {
-            self.time_in_force
-        }
-
-        fn stp(&self) -> SelfTradeProtection {
-            self.stp
-        }
-
-        fn display_quantity(&self) -> Option<NonZeroDecimal> {
-            self.display_quantity
-                .and_then(|d| NonZeroDecimal::new(d).ok())
-        }
-
-        fn order_flags(&self) -> crate::orderflags::OrderFlags {
-            OrderFlags::default()
-        }
-
-        fn userref(&self) -> Option<u32> {
-            None
-        }
+        builder.build().unwrap()
     }
 
     #[test]
     fn test_exact_match() {
         let mut orderbook = Orderbook::new_empty();
         {
-            let price = Decimal::from_str("100").unwrap();
-            let quantity = Decimal::from_str("50").unwrap();
+            let price = abs_price("100");
             let order_id = OrderUuid(uuid::Uuid::new_v4());
-            let user_id = common_core::web::middleware::clerk::ClerkUserId("test_user".to_string());
-            let order = TestOrder {
-                side: OrderSide::Sell,
-                order_type: OrderType::Limit,
+            let user_id = "test_user".to_owned();
+            let order = build_order(
+                OrderType::Limit,
+                OrderSide::Sell,
                 price,
-                quantity,
-                time_in_force: TimeInForce::GoodTilCanceled,
-                stp: SelfTradeProtection::CancelNewest,
-                display_quantity: None,
-            };
-            let price_nz = NonZeroDecimal::new(price).unwrap();
+                Some("50"),
+                TimeInForce::GoodTilCanceled,
+                SelfTradeProtection::CancelNewest,
+            );
+            let price_nz = NonZeroDecimal::new(price.amount).unwrap();
             orderbook.insert(price_nz, order_id, user_id, order);
         };
 
-        let taker = TestOrder {
-            side: OrderSide::Buy,
-            order_type: OrderType::Limit,
-            price: Decimal::from_str("100").unwrap(),
-            quantity: Decimal::from_str("50").unwrap(),
-            time_in_force: TimeInForce::GoodTilCanceled,
-            stp: SelfTradeProtection::CancelBoth,
-            display_quantity: None,
-        };
+        let taker_price = abs_price("100");
+        let taker = build_order(
+            OrderType::Limit,
+            OrderSide::Buy,
+            taker_price,
+            Some("50"),
+            TimeInForce::GoodTilCanceled,
+            SelfTradeProtection::CancelBoth,
+        );
 
-        let result = try_fill_orders(&mut orderbook, &taker, taker.price.into(), None).unwrap();
+        let result = try_fill_orders(
+            &mut orderbook,
+            &taker,
+            NonZeroDecimal::new(taker.price.amount).unwrap(),
+            None,
+        )
+        .unwrap();
         assert_eq!(
             result.taker_fill_outcome,
             Some(FillType::Complete {
@@ -319,58 +293,59 @@ mod tests {
         let mut orderbook = Orderbook::new_empty();
 
         // Add resting sell orders: one from same user, one from different user
-        let user_a = common_core::web::middleware::clerk::ClerkUserId("user_a".to_string());
-        let user_b = common_core::web::middleware::clerk::ClerkUserId("user_b".to_string());
+        let user_a = "user_a".to_owned();
+        let user_b = "user_b".to_owned();
 
         // Resting order from user_a (same user as taker)
         {
-            let price = Decimal::from_str("100").unwrap();
-            let quantity = Decimal::from_str("50").unwrap();
+            let price = abs_price("100");
             let order_id = OrderUuid(uuid::Uuid::new_v4());
-            let order = TestOrder {
-                side: OrderSide::Sell,
-                order_type: OrderType::Limit,
+            let order = build_order(
+                OrderType::Limit,
+                OrderSide::Sell,
                 price,
-                quantity,
-                time_in_force: TimeInForce::GoodTilCanceled,
-                stp: SelfTradeProtection::CancelNewest,
-                display_quantity: None,
-            };
-            let price_nz = NonZeroDecimal::new(price).unwrap();
+                Some("50"),
+                TimeInForce::GoodTilCanceled,
+                SelfTradeProtection::CancelNewest,
+            );
+            let price_nz = NonZeroDecimal::new(price.amount).unwrap();
             orderbook.insert(price_nz, order_id, user_a.clone(), order);
         };
 
         // Resting order from user_b (different user)
         {
-            let price = Decimal::from_str("101").unwrap();
-            let quantity = Decimal::from_str("30").unwrap();
+            let price = abs_price("101");
             let order_id = OrderUuid(uuid::Uuid::new_v4());
-            let order = TestOrder {
-                side: OrderSide::Sell,
-                order_type: OrderType::Limit,
+            let order = build_order(
+                OrderType::Limit,
+                OrderSide::Sell,
                 price,
-                quantity,
-                time_in_force: TimeInForce::GoodTilCanceled,
-                stp: SelfTradeProtection::CancelNewest,
-                display_quantity: None,
-            };
-            let price_nz = NonZeroDecimal::new(price).unwrap();
+                Some("30"),
+                TimeInForce::GoodTilCanceled,
+                SelfTradeProtection::CancelNewest,
+            );
+            let price_nz = NonZeroDecimal::new(price.amount).unwrap();
             orderbook.insert(price_nz, order_id, user_b.clone(), order);
         };
 
         // Taker order from user_a with CancelNewest STP
-        let taker = TestOrder {
-            side: OrderSide::Buy,
-            order_type: OrderType::Limit,
-            price: Decimal::from_str("101").unwrap(), // Can match both prices
-            quantity: Decimal::from_str("40").unwrap(),
-            time_in_force: TimeInForce::GoodTilCanceled,
-            stp: SelfTradeProtection::CancelNewest, // Should skip own resting order
-            display_quantity: None,
-        };
+        let taker_price = abs_price("101");
+        let taker = build_order(
+            OrderType::Limit,
+            OrderSide::Buy,
+            taker_price, // Can match both prices
+            Some("40"),
+            TimeInForce::GoodTilCanceled,
+            SelfTradeProtection::CancelNewest, // Should skip own resting order
+        );
 
         // Should succeed but skip user_a's resting order, only fill with user_b's
-        let result = try_fill_orders(&mut orderbook, &taker, taker.price.into(), Some(&user_a));
+        let result = try_fill_orders(
+            &mut orderbook,
+            &taker,
+            NonZeroDecimal::new(taker.price.amount).unwrap(),
+            Some(&user_a),
+        );
         assert!(result.is_ok());
 
         let pending_fill = result.unwrap();
@@ -385,59 +360,60 @@ mod tests {
         let mut orderbook = Orderbook::new_empty();
 
         // Add resting sell orders: one from same user, one from different user
-        let user_a = common_core::web::middleware::clerk::ClerkUserId("user_a".to_string());
-        let user_b = common_core::web::middleware::clerk::ClerkUserId("user_b".to_string());
+        let user_a = "user_a".to_owned();
+        let user_b = "user_b".to_owned();
 
         // Resting order from user_a (same user as taker) - this should be cancelled
         {
-            let price = Decimal::from_str("100").unwrap();
-            let quantity = Decimal::from_str("50").unwrap();
+            let price = abs_price("100");
             let order_id = OrderUuid(uuid::Uuid::new_v4());
-            let order = TestOrder {
-                side: OrderSide::Sell,
-                order_type: OrderType::Limit,
+            let order = build_order(
+                OrderType::Limit,
+                OrderSide::Sell,
                 price,
-                quantity,
-                time_in_force: TimeInForce::GoodTilCanceled,
-                stp: SelfTradeProtection::CancelOldest,
-                display_quantity: None,
-            };
-            let price_nz = NonZeroDecimal::new(price).unwrap();
+                Some("50"),
+                TimeInForce::GoodTilCanceled,
+                SelfTradeProtection::CancelOldest,
+            );
+            let price_nz = NonZeroDecimal::new(price.amount).unwrap();
             orderbook.insert(price_nz, order_id, user_a.clone(), order);
         };
 
         // Resting order from user_b (different user) - this should be matched
         {
-            let orderbook: &mut Orderbook = &mut orderbook;
-            let price = Decimal::from_str("101").unwrap();
-            let quantity = Decimal::from_str("30").unwrap();
+            let orderbook = &mut orderbook;
+            let price = abs_price("101");
             let order_id = OrderUuid(uuid::Uuid::new_v4());
-            let order = TestOrder {
-                side: OrderSide::Sell,
-                order_type: OrderType::Limit,
+            let order = build_order(
+                OrderType::Limit,
+                OrderSide::Sell,
                 price,
-                quantity,
-                time_in_force: TimeInForce::GoodTilCanceled,
-                stp: SelfTradeProtection::CancelOldest,
-                display_quantity: None,
-            };
-            let price_nz = NonZeroDecimal::new(price).unwrap();
+                Some("30"),
+                TimeInForce::GoodTilCanceled,
+                SelfTradeProtection::CancelOldest,
+            );
+            let price_nz = NonZeroDecimal::new(price.amount).unwrap();
             orderbook.insert(price_nz, order_id, user_b.clone(), order);
         };
 
         // Taker order from user_a with CancelOldest STP
-        let taker = TestOrder {
-            side: OrderSide::Buy,
-            order_type: OrderType::Limit,
-            price: Decimal::from_str("101").unwrap(), // Can match both prices
-            quantity: Decimal::from_str("40").unwrap(),
-            time_in_force: TimeInForce::GoodTilCanceled,
-            stp: SelfTradeProtection::CancelOldest, // Should cancel own resting order
-            display_quantity: None,
-        };
+        let taker_price = abs_price("101");
+        let taker = build_order(
+            OrderType::Limit,
+            OrderSide::Buy,
+            taker_price, // Can match both prices
+            Some("40"),
+            TimeInForce::GoodTilCanceled,
+            SelfTradeProtection::CancelOldest, // Should cancel own resting order
+        );
 
         // Should succeed and fill with user_b's order, while cancelling user_a's resting order
-        let result = try_fill_orders(&mut orderbook, &taker, taker.price.into(), Some(&user_a));
+        let result = try_fill_orders(
+            &mut orderbook,
+            &taker,
+            NonZeroDecimal::new(taker.price.amount).unwrap(),
+            Some(&user_a),
+        );
         assert!(result.is_ok());
 
         let pending_fill = result.unwrap();
@@ -481,60 +457,61 @@ mod tests {
         let mut orderbook = Orderbook::new_empty();
 
         // Add resting sell orders: one from same user, one from different user
-        let user_a = common_core::web::middleware::clerk::ClerkUserId("user_a".to_string());
-        let user_b = common_core::web::middleware::clerk::ClerkUserId("user_b".to_string());
+        let user_a = "user_a".to_owned();
+        let user_b = "user_b".to_owned();
 
         // Resting order from user_a (same user as taker) - this should be cancelled
         {
-            let orderbook: &mut Orderbook = &mut orderbook;
-            let price = Decimal::from_str("100").unwrap();
-            let quantity = Decimal::from_str("50").unwrap();
+            let orderbook = &mut orderbook;
+            let price = abs_price("100");
             let order_id = OrderUuid(uuid::Uuid::new_v4());
-            let order = TestOrder {
-                side: OrderSide::Sell,
-                order_type: OrderType::Limit,
+            let order = build_order(
+                OrderType::Limit,
+                OrderSide::Sell,
                 price,
-                quantity,
-                time_in_force: TimeInForce::GoodTilCanceled,
-                stp: SelfTradeProtection::CancelBoth,
-                display_quantity: None,
-            };
-            let price_nz = NonZeroDecimal::new(price).unwrap();
+                Some("50"),
+                TimeInForce::GoodTilCanceled,
+                SelfTradeProtection::CancelBoth,
+            );
+            let price_nz = NonZeroDecimal::new(price.amount).unwrap();
             orderbook.insert(price_nz, order_id, user_a.clone(), order);
         };
 
         // Resting order from user_b (different user) - this should be matched
         {
-            let orderbook: &mut Orderbook = &mut orderbook;
-            let price = Decimal::from_str("101").unwrap();
-            let quantity = Decimal::from_str("30").unwrap();
+            let orderbook = &mut orderbook;
+            let price = abs_price("101");
             let order_id = OrderUuid(uuid::Uuid::new_v4());
-            let order = TestOrder {
-                side: OrderSide::Sell,
-                order_type: OrderType::Limit,
+            let order = build_order(
+                OrderType::Limit,
+                OrderSide::Sell,
                 price,
-                quantity,
-                time_in_force: TimeInForce::GoodTilCanceled,
-                stp: SelfTradeProtection::CancelBoth,
-                display_quantity: None,
-            };
-            let price_nz = NonZeroDecimal::new(price).unwrap();
+                Some("30"),
+                TimeInForce::GoodTilCanceled,
+                SelfTradeProtection::CancelBoth,
+            );
+            let price_nz = NonZeroDecimal::new(price.amount).unwrap();
             orderbook.insert(price_nz, order_id, user_b.clone(), order);
         };
 
         // Taker order from user_a with CancelBoth STP
-        let taker = TestOrder {
-            side: OrderSide::Buy,
-            order_type: OrderType::Limit,
-            price: Decimal::from_str("101").unwrap(), // Can match both prices
-            quantity: Decimal::from_str("40").unwrap(),
-            time_in_force: TimeInForce::GoodTilCanceled,
-            stp: SelfTradeProtection::CancelBoth, // Should cancel both orders on self-trade
-            display_quantity: None,
-        };
+        let taker_price = abs_price("101");
+        let taker = build_order(
+            OrderType::Limit,
+            OrderSide::Buy,
+            taker_price, // Can match both prices
+            Some("40"),
+            TimeInForce::GoodTilCanceled,
+            SelfTradeProtection::CancelBoth, // Should cancel both orders on self-trade
+        );
 
         // CancelBoth should cancel both orders when self-trade is detected
-        let result = try_fill_orders(&mut orderbook, &taker, taker.price.into(), Some(&user_a));
+        let result = try_fill_orders(
+            &mut orderbook,
+            &taker,
+            NonZeroDecimal::new(taker.price.amount).unwrap(),
+            Some(&user_a),
+        );
         assert!(result.is_ok());
 
         let pending_fill = result.unwrap();
@@ -580,21 +557,19 @@ mod tests {
         // Setup: Three sell orders at different prices
         // Best ask: $50,000
         {
-            let price = Decimal::from_str("50000").unwrap();
-            let quantity = Decimal::from_str("1.0").unwrap();
+            let price = abs_price("50000");
             let order_id = OrderUuid(uuid::Uuid::new_v4());
-            let user_id = common_core::web::middleware::clerk::ClerkUserId("seller_1".to_string());
-            let order = TestOrder {
-                side: OrderSide::Sell,
-                order_type: OrderType::Limit,
+            let user_id = "seller_1".to_owned();
+            let order = build_order(
+                OrderType::Limit,
+                OrderSide::Sell,
                 price,
-                quantity,
-                time_in_force: TimeInForce::GoodTilCanceled,
-                stp: SelfTradeProtection::CancelNewest,
-                display_quantity: None,
-            };
+                Some("1.0"),
+                TimeInForce::GoodTilCanceled,
+                SelfTradeProtection::CancelNewest,
+            );
             orderbook.insert(
-                NonZeroDecimal::new(price).unwrap(),
+                NonZeroDecimal::new(price.amount).unwrap(),
                 order_id,
                 user_id,
                 order,
@@ -603,21 +578,19 @@ mod tests {
 
         // Second best: $51,000
         {
-            let price = Decimal::from_str("51000").unwrap();
-            let quantity = Decimal::from_str("1.5").unwrap();
+            let price = abs_price("51000");
             let order_id = OrderUuid(uuid::Uuid::new_v4());
-            let user_id = common_core::web::middleware::clerk::ClerkUserId("seller_2".to_string());
-            let order = TestOrder {
-                side: OrderSide::Sell,
-                order_type: OrderType::Limit,
+            let user_id = "seller_2".to_owned();
+            let order = build_order(
+                OrderType::Limit,
+                OrderSide::Sell,
                 price,
-                quantity,
-                time_in_force: TimeInForce::GoodTilCanceled,
-                stp: SelfTradeProtection::CancelNewest,
-                display_quantity: None,
-            };
+                Some("1.5"),
+                TimeInForce::GoodTilCanceled,
+                SelfTradeProtection::CancelNewest,
+            );
             orderbook.insert(
-                NonZeroDecimal::new(price).unwrap(),
+                NonZeroDecimal::new(price.amount).unwrap(),
                 order_id,
                 user_id,
                 order,
@@ -626,21 +599,19 @@ mod tests {
 
         // Worst: $52,000
         {
-            let price = Decimal::from_str("52000").unwrap();
-            let quantity = Decimal::from_str("2.0").unwrap();
+            let price = abs_price("52000");
             let order_id = OrderUuid(uuid::Uuid::new_v4());
-            let user_id = common_core::web::middleware::clerk::ClerkUserId("seller_3".to_string());
-            let order = TestOrder {
-                side: OrderSide::Sell,
-                order_type: OrderType::Limit,
+            let user_id = "seller_3".to_owned();
+            let order = build_order(
+                OrderType::Limit,
+                OrderSide::Sell,
                 price,
-                quantity,
-                time_in_force: TimeInForce::GoodTilCanceled,
-                stp: SelfTradeProtection::CancelNewest,
-                display_quantity: None,
-            };
+                Some("2.0"),
+                TimeInForce::GoodTilCanceled,
+                SelfTradeProtection::CancelNewest,
+            );
             orderbook.insert(
-                NonZeroDecimal::new(price).unwrap(),
+                NonZeroDecimal::new(price.amount).unwrap(),
                 order_id,
                 user_id,
                 order,
@@ -649,17 +620,22 @@ mod tests {
 
         // Market buy: 3.0 BTC - will take all available liquidity across price levels
         // Note: price field required but not used for market orders (Kraken behavior)
-        let taker = TestOrder {
-            side: OrderSide::Buy,
-            order_type: OrderType::Market,
-            price: Decimal::from_str("1").unwrap(), // Dummy value (not used)
-            quantity: Decimal::from_str("3.0").unwrap(),
-            time_in_force: TimeInForce::ImmediateOrCancel,
-            stp: SelfTradeProtection::CancelNewest,
-            display_quantity: None,
-        };
+        let taker_price = abs_price("1"); // Dummy value (not used)
+        let taker = build_order(
+            OrderType::Market,
+            OrderSide::Buy,
+            taker_price,
+            Some("3.0"),
+            TimeInForce::ImmediateOrCancel,
+            SelfTradeProtection::CancelNewest,
+        );
 
-        let result = try_fill_orders(&mut orderbook, &taker, taker.price.into(), None);
+        let result = try_fill_orders(
+            &mut orderbook,
+            &taker,
+            NonZeroDecimal::new(taker.price.amount).unwrap(),
+            None,
+        );
         assert!(result.is_ok());
 
         let pending_fill = result.unwrap();
@@ -720,21 +696,19 @@ mod tests {
 
         // Only 1 BTC available at $50k
         {
-            let price = Decimal::from_str("50000").unwrap();
-            let quantity = Decimal::from_str("1.0").unwrap();
+            let price = abs_price("50000");
             let order_id = OrderUuid(uuid::Uuid::new_v4());
-            let user_id = common_core::web::middleware::clerk::ClerkUserId("seller_1".to_string());
-            let order = TestOrder {
-                side: OrderSide::Sell,
-                order_type: OrderType::Limit,
+            let user_id = "seller_1".to_owned();
+            let order = build_order(
+                OrderType::Limit,
+                OrderSide::Sell,
                 price,
-                quantity,
-                time_in_force: TimeInForce::GoodTilCanceled,
-                stp: SelfTradeProtection::CancelNewest,
-                display_quantity: None,
-            };
+                Some("1.0"),
+                TimeInForce::GoodTilCanceled,
+                SelfTradeProtection::CancelNewest,
+            );
             orderbook.insert(
-                NonZeroDecimal::new(price).unwrap(),
+                NonZeroDecimal::new(price.amount).unwrap(),
                 order_id,
                 user_id,
                 order,
@@ -742,17 +716,22 @@ mod tests {
         }
 
         // Market buy: Want 5.0 BTC but only 1.0 available
-        let taker = TestOrder {
-            side: OrderSide::Buy,
-            order_type: OrderType::Market,
-            price: Decimal::from_str("1").unwrap(), // Dummy value
-            quantity: Decimal::from_str("5.0").unwrap(),
-            time_in_force: TimeInForce::ImmediateOrCancel, // IOC allows partial
-            stp: SelfTradeProtection::CancelNewest,
-            display_quantity: None,
-        };
+        let taker_price = abs_price("1"); // Dummy value
+        let taker = build_order(
+            OrderType::Market,
+            OrderSide::Buy,
+            taker_price,
+            Some("5.0"),
+            TimeInForce::ImmediateOrCancel, // IOC allows partial
+            SelfTradeProtection::CancelNewest,
+        );
 
-        let result = try_fill_orders(&mut orderbook, &taker, taker.price.into(), None);
+        let result = try_fill_orders(
+            &mut orderbook,
+            &taker,
+            NonZeroDecimal::new(taker.price.amount).unwrap(),
+            None,
+        );
         assert!(result.is_ok());
 
         let pending_fill = result.unwrap();
@@ -772,25 +751,23 @@ mod tests {
         let mut orderbook = Orderbook::new_empty();
 
         // Setup: Two sell orders, taker will be completely filled by first one
-        let seller_1 = common_core::web::middleware::clerk::ClerkUserId("seller_1".to_string());
-        let seller_2 = common_core::web::middleware::clerk::ClerkUserId("seller_2".to_string());
+        let seller_1 = "seller_1".to_owned();
+        let seller_2 = "seller_2".to_owned();
 
         // Resting order 1: 50 BTC @ $100 (best price)
         {
-            let price = Decimal::from_str("100").unwrap();
-            let quantity = Decimal::from_str("50").unwrap();
+            let price = abs_price("100");
             let order_id = OrderUuid(uuid::Uuid::new_v4());
-            let order = TestOrder {
-                side: OrderSide::Sell,
-                order_type: OrderType::Limit,
+            let order = build_order(
+                OrderType::Limit,
+                OrderSide::Sell,
                 price,
-                quantity,
-                time_in_force: TimeInForce::GoodTilCanceled,
-                stp: SelfTradeProtection::CancelNewest,
-                display_quantity: None,
-            };
+                Some("50"),
+                TimeInForce::GoodTilCanceled,
+                SelfTradeProtection::CancelNewest,
+            );
             orderbook.insert(
-                NonZeroDecimal::new(price).unwrap(),
+                NonZeroDecimal::new(price.amount).unwrap(),
                 order_id,
                 seller_1.clone(),
                 order,
@@ -799,20 +776,18 @@ mod tests {
 
         // Resting order 2: 50 BTC @ $101 (worse price, should NOT be matched)
         {
-            let price = Decimal::from_str("101").unwrap();
-            let quantity = Decimal::from_str("50").unwrap();
+            let price = abs_price("101");
             let order_id = OrderUuid(uuid::Uuid::new_v4());
-            let order = TestOrder {
-                side: OrderSide::Sell,
-                order_type: OrderType::Limit,
+            let order = build_order(
+                OrderType::Limit,
+                OrderSide::Sell,
                 price,
-                quantity,
-                time_in_force: TimeInForce::GoodTilCanceled,
-                stp: SelfTradeProtection::CancelNewest,
-                display_quantity: None,
-            };
+                Some("50"),
+                TimeInForce::GoodTilCanceled,
+                SelfTradeProtection::CancelNewest,
+            );
             orderbook.insert(
-                NonZeroDecimal::new(price).unwrap(),
+                NonZeroDecimal::new(price.amount).unwrap(),
                 order_id,
                 seller_2.clone(),
                 order,
@@ -820,18 +795,23 @@ mod tests {
         }
 
         // Taker: Buy 50 BTC @ $101 (willing to pay up to $101)
-        let taker = TestOrder {
-            side: OrderSide::Buy,
-            order_type: OrderType::Limit,
-            price: Decimal::from_str("101").unwrap(),
-            quantity: Decimal::from_str("50").unwrap(), // Exactly matches first order
-            time_in_force: TimeInForce::GoodTilCanceled,
-            stp: SelfTradeProtection::CancelNewest,
-            display_quantity: None,
-        };
+        let taker_price = abs_price("101");
+        let taker = build_order(
+            OrderType::Limit,
+            OrderSide::Buy,
+            taker_price,
+            Some("50"), // Exactly matches first order
+            TimeInForce::GoodTilCanceled,
+            SelfTradeProtection::CancelNewest,
+        );
 
         // CORRECT BEHAVIOR: Should stop matching after taker is completely filled
-        let result = try_fill_orders(&mut orderbook, &taker, taker.price.into(), None);
+        let result = try_fill_orders(
+            &mut orderbook,
+            &taker,
+            NonZeroDecimal::new(taker.price.amount).unwrap(),
+            None,
+        );
         assert!(result.is_ok());
 
         let pending_fill = result.unwrap();

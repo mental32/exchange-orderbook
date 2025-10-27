@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OrderFlags {
     pub post_only: bool,
     pub fee_in_base_currency: bool,
@@ -6,7 +6,17 @@ pub struct OrderFlags {
     pub volume_in_quote_currency: bool,
 }
 
-#[cfg(feature = "serde")]
+impl Default for OrderFlags {
+    fn default() -> Self {
+        Self {
+            post_only: false,
+            fee_in_base_currency: false,
+            fee_in_quote_currency: false,
+            volume_in_quote_currency: false,
+        }
+    }
+}
+
 pub fn serialize<S>(value: &OrderFlags, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
@@ -29,7 +39,6 @@ where
     parts.join(",").serialize(serializer)
 }
 
-#[cfg(feature = "serde")]
 pub fn deserialize<'de, D>(deserializer: D) -> Result<OrderFlags, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -71,7 +80,6 @@ where
     Ok(flags)
 }
 
-#[cfg(feature = "serde")]
 pub fn deserialize_orderflags_option<'de, D>(
     deserializer: D,
 ) -> Result<Option<OrderFlags>, D::Error>
