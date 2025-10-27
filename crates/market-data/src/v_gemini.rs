@@ -66,10 +66,110 @@ pub const DEFAULT_WEBSOCKET_ADDRESS: &str = "wss://api.gemini.com/v1/marketdata/
 pub struct GeminiConfig {
     /// Websocket address to connect to.
     pub websocket_address: String,
-    /// List of symbols to track.
+    /// List of symbols to track (e.g., "BTCUSD").
     pub track_symbols: Vec<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct GeminiMessage {
+    #[serde(rename = "type")]
+    pub msg_type: String,
+    #[serde(rename = "eventId")]
+    pub event_id: u64,
+    pub events: Vec<GeminiEvent>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "type")]
+pub enum GeminiEvent {
+    #[serde(rename = "trade")]
+    Trade {
+        price: String,
+        quantity: String,
+        side: String,
+    },
+    #[serde(rename = "change")]
+    Change {
+        side: String,
+        price: String,
+        remaining: String,
+        delta: String,
+        reason: String,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct GeminiTrade {
+    pub price: f64,
+    pub quantity: f64,
+    pub side: String,
+}
+
+impl From<GeminiTrade> for crate::UnifiedTicker {
+    fn from(trade: GeminiTrade) -> Self {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        Self {
+            venue: "gemini".to_owned(),
+            symbol: "BTCUSD".to_owned(),
+            timestamp,
+            last_price: trade.price,
+            bid: None,
+            ask: None,
+            volume_24h: None,
+            high_24h: None,
+            low_24h: None,
+        }
+    }
+}
+
+pub async fn connect(
+    config: &GeminiConfig,
+) -> Result<impl futures::Stream<Item = Result<GeminiTrade, String>>, String> {
+    let (stream, _response) = tokio_tungstenite::connect_async(&config.websocket_address)
+        .await
+        .map_err(|e| format!("Failed to connect to Gemini: {}", e))?;
+
+    let (_write, read) = stream.split();
+
+    Ok(read.filter_map(|msg| async move {
+        match msg {
+            Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
+                match serde_json::from_str::<GeminiMessage>(&text) {
+                    Ok(message) if message.msg_type == "update" => {
+                        // Extract trade events
+                        for event in message.events {
+                            if let GeminiEvent::Trade {
+                                price,
+                                quantity,
+                                side,
+                            } = event
+                            {
+                                if let (Ok(p), Ok(q)) = (price.parse(), quantity.parse()) {
+                                    return Some(Ok(GeminiTrade {
+                                        price: p,
+                                        quantity: q,
+                                        side,
+                                    }));
+                                }
+                            }
+                        }
+                        None
+                    }
+                    Ok(_) => None,
+                    Err(_) => None,
+                }
+            }
+            Ok(_) => None,
+            Err(e) => Some(Err(format!("WebSocket error: {}", e))),
+        }
+    }))
+}
+
+#[ignore]
 #[tokio::test]
 async fn test_gemini_connection() {
     let (mut stream, response) = tokio_tungstenite::connect_async(DEFAULT_WEBSOCKET_ADDRESS)

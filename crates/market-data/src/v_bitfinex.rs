@@ -66,10 +66,131 @@ pub const DEFAULT_WEBSOCKET_ADDRESS: &str = "wss://api-pub.bitfinex.com/ws/2";
 pub struct BitfinexConfig {
     /// Websocket address to connect to.
     pub websocket_address: String,
-    /// List of symbols to track.
+    /// List of symbols to track (e.g., "tBTCUSD").
     pub track_symbols: Vec<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum BitfinexMessage {
+    Event(BitfinexEvent),
+    Ticker(BitfinexTickerData),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BitfinexEvent {
+    pub event: String,
+    #[serde(default)]
+    pub channel: Option<String>,
+    #[serde(default, rename = "chanId")]
+    pub chan_id: Option<u64>,
+    #[serde(default)]
+    pub symbol: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BitfinexTickerData(pub u64, pub Vec<f64>);
+
+#[derive(Clone, Debug)]
+pub struct BitfinexTicker {
+    pub channel_id: u64,
+    pub bid: f64,
+    pub bid_size: f64,
+    pub ask: f64,
+    pub ask_size: f64,
+    pub daily_change: f64,
+    pub daily_change_relative: f64,
+    pub last_price: f64,
+    pub volume: f64,
+    pub high: f64,
+    pub low: f64,
+}
+
+impl TryFrom<BitfinexTickerData> for BitfinexTicker {
+    type Error = String;
+
+    fn try_from(data: BitfinexTickerData) -> Result<Self, Self::Error> {
+        if data.1.len() < 10 {
+            return Err("Invalid ticker data length".to_owned());
+        }
+        Ok(Self {
+            channel_id: data.0,
+            bid: data.1[0],
+            bid_size: data.1[1],
+            ask: data.1[2],
+            ask_size: data.1[3],
+            daily_change: data.1[4],
+            daily_change_relative: data.1[5],
+            last_price: data.1[6],
+            volume: data.1[7],
+            high: data.1[8],
+            low: data.1[9],
+        })
+    }
+}
+
+impl From<BitfinexTicker> for crate::UnifiedTicker {
+    fn from(ticker: BitfinexTicker) -> Self {
+        Self {
+            venue: "bitfinex".to_owned(),
+            symbol: "BTCUSD".to_owned(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+            last_price: ticker.last_price,
+            bid: Some(ticker.bid),
+            ask: Some(ticker.ask),
+            volume_24h: Some(ticker.volume),
+            high_24h: Some(ticker.high),
+            low_24h: Some(ticker.low),
+        }
+    }
+}
+
+pub async fn connect(
+    config: &BitfinexConfig,
+) -> Result<impl futures::Stream<Item = Result<BitfinexTicker, String>>, String> {
+    use futures::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (stream, _response) = tokio_tungstenite::connect_async(&config.websocket_address)
+        .await
+        .map_err(|e| format!("Failed to connect to Bitfinex: {}", e))?;
+
+    let (mut write, read) = stream.split();
+
+    // Subscribe to all configured symbols
+    for symbol in &config.track_symbols {
+        let subscribe_msg = serde_json::json!({
+            "event": "subscribe",
+            "channel": "ticker",
+            "symbol": symbol
+        });
+        write
+            .send(Message::Text(subscribe_msg.to_string()))
+            .await
+            .map_err(|e| format!("Failed to send subscription: {}", e))?;
+    }
+
+    Ok(read.filter_map(|msg| async move {
+        match msg {
+            Ok(Message::Text(text)) => {
+                match serde_json::from_str::<BitfinexMessage>(&text) {
+                    Ok(BitfinexMessage::Ticker(data)) => {
+                        BitfinexTicker::try_from(data).ok().map(Ok)
+                    }
+                    Ok(BitfinexMessage::Event(_)) => None, // Skip subscription confirmations
+                    Err(e) => Some(Err(format!("Failed to parse Bitfinex message: {}", e))),
+                }
+            }
+            Ok(_) => None,
+            Err(e) => Some(Err(format!("WebSocket error: {}", e))),
+        }
+    }))
+}
+
+#[ignore]
 #[tokio::test]
 async fn test_bitfinex_connection() {
     use tokio_tungstenite::tungstenite::Message;

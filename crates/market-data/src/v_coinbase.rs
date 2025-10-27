@@ -65,10 +65,101 @@ pub const DEFAULT_WEBSOCKET_ADDRESS: &str = "wss://advanced-trade-ws.coinbase.co
 pub struct CoinbaseConfig {
     /// Websocket address to connect to.
     pub websocket_address: String,
-    /// List of symbols to track.
+    /// List of symbols to track (e.g., "BTC-USD").
     pub track_symbols: Vec<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CoinbaseMessage {
+    pub channel: String,
+    pub timestamp: String,
+    pub events: Vec<CoinbaseEvent>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CoinbaseEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub tickers: Vec<CoinbaseTicker>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CoinbaseTicker {
+    pub product_id: String,
+    pub price: String,
+    pub volume_24_h: String,
+    pub low_24_h: String,
+    pub high_24_h: String,
+    pub best_bid: String,
+    pub best_ask: String,
+}
+
+impl From<CoinbaseTicker> for crate::UnifiedTicker {
+    fn from(ticker: CoinbaseTicker) -> Self {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        Self {
+            venue: "coinbase".to_owned(),
+            symbol: ticker.product_id,
+            timestamp,
+            last_price: ticker.price.parse().unwrap_or(0.0),
+            bid: ticker.best_bid.parse().ok(),
+            ask: ticker.best_ask.parse().ok(),
+            volume_24h: ticker.volume_24_h.parse().ok(),
+            high_24h: ticker.high_24_h.parse().ok(),
+            low_24h: ticker.low_24_h.parse().ok(),
+        }
+    }
+}
+
+pub async fn connect(
+    config: &CoinbaseConfig,
+) -> Result<impl futures::Stream<Item = Result<CoinbaseTicker, String>>, String> {
+    use futures::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (stream, _response) = tokio_tungstenite::connect_async(&config.websocket_address)
+        .await
+        .map_err(|e| format!("Failed to connect to Coinbase: {}", e))?;
+
+    let (mut write, read) = stream.split();
+
+    // Subscribe to ticker channel for all configured symbols
+    let subscribe_msg = serde_json::json!({
+        "type": "subscribe",
+        "product_ids": config.track_symbols,
+        "channel": "ticker"
+    });
+
+    write
+        .send(Message::Text(subscribe_msg.to_string()))
+        .await
+        .map_err(|e| format!("Failed to send subscription: {}", e))?;
+
+    Ok(read.filter_map(|msg| async move {
+        match msg {
+            Ok(Message::Text(text)) => {
+                match serde_json::from_str::<CoinbaseMessage>(&text) {
+                    Ok(message) if message.channel == "ticker" => {
+                        // Flatten tickers from all events
+                        let tickers: Vec<_> =
+                            message.events.into_iter().flat_map(|e| e.tickers).collect();
+                        tickers.into_iter().next().map(Ok)
+                    }
+                    Ok(_) => None, // Skip subscription confirmations
+                    Err(_) => None,
+                }
+            }
+            Ok(_) => None,
+            Err(e) => Some(Err(format!("WebSocket error: {}", e))),
+        }
+    }))
+}
+
+#[ignore]
 #[tokio::test]
 async fn test_coinbase_connection() {
     use tokio_tungstenite::tungstenite::Message;

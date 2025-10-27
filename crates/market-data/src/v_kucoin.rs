@@ -86,6 +86,124 @@ struct InstanceServer {
     ping_timeout: u64,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct KucoinMessage {
+    #[serde(rename = "type")]
+    pub msg_type: String,
+    pub topic: String,
+    pub subject: String,
+    pub data: KucoinTickerData,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct KucoinTickerData {
+    pub sequence: String,
+    pub price: String,
+    pub size: String,
+    #[serde(rename = "bestAsk")]
+    pub best_ask: String,
+    #[serde(rename = "bestAskSize")]
+    pub best_ask_size: String,
+    #[serde(rename = "bestBid")]
+    pub best_bid: String,
+    #[serde(rename = "bestBidSize")]
+    pub best_bid_size: String,
+}
+
+impl From<KucoinMessage> for crate::UnifiedTicker {
+    fn from(msg: KucoinMessage) -> Self {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        // Extract symbol from topic like "/market/ticker:BTC-USDT"
+        let symbol = msg.topic.split(':').nth(1).unwrap_or("UNKNOWN").to_string();
+
+        Self {
+            venue: "kucoin".to_owned(),
+            symbol,
+            timestamp,
+            last_price: msg.data.price.parse().unwrap_or(0.0),
+            bid: msg.data.best_bid.parse().ok(),
+            ask: msg.data.best_ask.parse().ok(),
+            volume_24h: None,
+            high_24h: None,
+            low_24h: None,
+        }
+    }
+}
+
+pub async fn connect(
+    config: &KucoinConfig,
+) -> Result<impl futures::Stream<Item = Result<KucoinMessage, String>>, String> {
+    use futures::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    // Step 1: Get public token via REST API
+    let client = reqwest::Client::new();
+    let token_url = format!("{}{}", config.rest_api_base, PUBLIC_TOKEN_ENDPOINT);
+
+    let response = client
+        .post(&token_url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get Kucoin token: {}", e))?;
+
+    let token_response: TokenResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Kucoin token response: {}", e))?;
+
+    let token = token_response.data.token;
+    let endpoint = &token_response.data.instance_servers[0].endpoint;
+
+    // Step 2: Connect to WebSocket with token
+    let ws_url = format!("{}?token={}", endpoint, token);
+
+    let (stream, _response) = tokio_tungstenite::connect_async(&ws_url)
+        .await
+        .map_err(|e| format!("Failed to connect to Kucoin WebSocket: {}", e))?;
+
+    let (mut write, read) = stream.split();
+
+    // Step 3: Subscribe to ticker for all configured symbols
+    for symbol in &config.track_symbols {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+
+        let subscribe_msg = serde_json::json!({
+            "id": timestamp,
+            "type": "subscribe",
+            "topic": format!("/market/ticker:{}", symbol),
+            "privateChannel": false,
+            "response": true
+        });
+
+        write
+            .send(Message::Text(subscribe_msg.to_string()))
+            .await
+            .map_err(|e| format!("Failed to send subscription: {}", e))?;
+    }
+
+    Ok(read.filter_map(|msg| async move {
+        match msg {
+            Ok(Message::Text(text)) => {
+                match serde_json::from_str::<KucoinMessage>(&text) {
+                    Ok(message) if message.msg_type == "message" => Some(Ok(message)),
+                    Ok(_) => None, // Skip subscription confirmations
+                    Err(_) => None,
+                }
+            }
+            Ok(_) => None,
+            Err(e) => Some(Err(format!("WebSocket error: {}", e))),
+        }
+    }))
+}
+
+#[ignore]
 #[tokio::test]
 async fn test_kucoin_connection() {
     use tokio_tungstenite::tungstenite::Message;

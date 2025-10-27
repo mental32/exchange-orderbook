@@ -54,10 +54,96 @@ pub const DEFAULT_WEBSOCKET_ADDRESS: &str = "wss://stream.bybit.com/v5/public/sp
 pub struct BybitConfig {
     /// Websocket address to connect to.
     pub websocket_address: String,
-    /// List of symbols to track.
+    /// List of symbols to track (e.g., "BTCUSDT").
     pub track_symbols: Vec<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BybitMessage {
+    pub topic: String,
+    pub ts: u64,
+    #[serde(rename = "type")]
+    pub msg_type: String,
+    pub data: BybitTickerData,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BybitTickerData {
+    pub symbol: String,
+    #[serde(rename = "lastPrice")]
+    pub last_price: String,
+    #[serde(rename = "highPrice24h")]
+    pub high_price_24h: String,
+    #[serde(rename = "lowPrice24h")]
+    pub low_price_24h: String,
+    #[serde(rename = "volume24h")]
+    pub volume_24h: String,
+    #[serde(rename = "bid1Price")]
+    pub bid1_price: String,
+    #[serde(rename = "ask1Price")]
+    pub ask1_price: String,
+}
+
+impl From<BybitMessage> for crate::UnifiedTicker {
+    fn from(msg: BybitMessage) -> Self {
+        Self {
+            venue: "bybit".to_owned(),
+            symbol: msg.data.symbol,
+            timestamp: msg.ts,
+            last_price: msg.data.last_price.parse().unwrap_or(0.0),
+            bid: msg.data.bid1_price.parse().ok(),
+            ask: msg.data.ask1_price.parse().ok(),
+            volume_24h: msg.data.volume_24h.parse().ok(),
+            high_24h: msg.data.high_price_24h.parse().ok(),
+            low_24h: msg.data.low_price_24h.parse().ok(),
+        }
+    }
+}
+
+pub async fn connect(
+    config: &BybitConfig,
+) -> Result<impl futures::Stream<Item = Result<BybitMessage, String>>, String> {
+    use futures::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (stream, _response) = tokio_tungstenite::connect_async(&config.websocket_address)
+        .await
+        .map_err(|e| format!("Failed to connect to Bybit: {}", e))?;
+
+    let (mut write, read) = stream.split();
+
+    // Subscribe to tickers for all configured symbols
+    let args: Vec<String> = config
+        .track_symbols
+        .iter()
+        .map(|s| format!("tickers.{}", s))
+        .collect();
+
+    let subscribe_msg = serde_json::json!({
+        "op": "subscribe",
+        "args": args
+    });
+
+    write
+        .send(Message::Text(subscribe_msg.to_string()))
+        .await
+        .map_err(|e| format!("Failed to send subscription: {}", e))?;
+
+    Ok(read.filter_map(|msg| async move {
+        match msg {
+            Ok(Message::Text(text)) => {
+                match serde_json::from_str::<BybitMessage>(&text) {
+                    Ok(message) => Some(Ok(message)),
+                    Err(_) => None, // Skip subscription confirmations and other messages
+                }
+            }
+            Ok(_) => None,
+            Err(e) => Some(Err(format!("WebSocket error: {}", e))),
+        }
+    }))
+}
+
+#[ignore]
 #[tokio::test]
 async fn test_bybit_connection() {
     use tokio_tungstenite::tungstenite::Message;

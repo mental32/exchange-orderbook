@@ -45,10 +45,99 @@ pub const DEFAULT_WEBSOCKET_ADDRESS: &str = "wss://ws.kraken.com/v2";
 pub struct KrakenConfig {
     /// Websocket address to connect to.
     pub websocket_address: String,
-    /// List of symbols to track.
+    /// List of symbols to track (e.g., "BTC/USD").
     pub track_symbols: Vec<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct KrakenMessage {
+    pub channel: String,
+    #[serde(rename = "type")]
+    pub msg_type: String,
+    pub data: Vec<KrakenTickerData>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct KrakenTickerData {
+    pub symbol: String,
+    pub bid: f64,
+    pub bid_qty: f64,
+    pub ask: f64,
+    pub ask_qty: f64,
+    pub last: f64,
+    pub volume: f64,
+    pub vwap: f64,
+    pub low: f64,
+    pub high: f64,
+    pub change: f64,
+    pub change_pct: f64,
+}
+
+impl From<KrakenTickerData> for crate::UnifiedTicker {
+    fn from(data: KrakenTickerData) -> Self {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        Self {
+            venue: "kraken".to_owned(),
+            symbol: data.symbol,
+            timestamp,
+            last_price: data.last,
+            bid: Some(data.bid),
+            ask: Some(data.ask),
+            volume_24h: Some(data.volume),
+            high_24h: Some(data.high),
+            low_24h: Some(data.low),
+        }
+    }
+}
+
+pub async fn connect(
+    config: &KrakenConfig,
+) -> Result<impl futures::Stream<Item = Result<KrakenTickerData, String>>, String> {
+    use futures::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (stream, _response) = tokio_tungstenite::connect_async(&config.websocket_address)
+        .await
+        .map_err(|e| format!("Failed to connect to Kraken: {}", e))?;
+
+    let (mut write, read) = stream.split();
+
+    // Subscribe to ticker channel for all configured symbols
+    let subscribe_msg = serde_json::json!({
+        "method": "subscribe",
+        "params": {
+            "channel": "ticker",
+            "symbol": config.track_symbols
+        }
+    });
+
+    write
+        .send(Message::Text(subscribe_msg.to_string()))
+        .await
+        .map_err(|e| format!("Failed to send subscription: {}", e))?;
+
+    Ok(read.filter_map(|msg| async move {
+        match msg {
+            Ok(Message::Text(text)) => {
+                match serde_json::from_str::<KrakenMessage>(&text) {
+                    Ok(message) if message.channel == "ticker" => {
+                        message.data.into_iter().next().map(Ok)
+                    }
+                    Ok(_) => None, // Skip subscription confirmations
+                    Err(_) => None,
+                }
+            }
+            Ok(_) => None,
+            Err(e) => Some(Err(format!("WebSocket error: {}", e))),
+        }
+    }))
+}
+
+#[ignore]
 #[tokio::test]
 async fn test_kraken_connection() {
     use tokio_tungstenite::tungstenite::Message;

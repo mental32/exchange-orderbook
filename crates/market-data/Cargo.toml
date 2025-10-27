@@ -9,6 +9,7 @@ serde = ["dep:serde"]
 
 [dependencies]
 serde = { workspace = true, optional = true }
+serde_json.workspace = true
 tokio-tungstenite.workspace = true
 tokio.workspace = true
 tracing.workspace = true

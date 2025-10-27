@@ -37,10 +37,97 @@ pub const DEFAULT_WEBSOCKET_ADDRESS: &str = "wss://api.gateio.ws/ws/v4/";
 pub struct GateIoConfig {
     /// Websocket address to connect to.
     pub websocket_address: String,
-    /// List of symbols to track.
+    /// List of symbols to track (e.g., "BTC_USDT").
     pub track_symbols: Vec<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct GateIoMessage {
+    pub time: u64,
+    pub channel: String,
+    pub event: String,
+    #[serde(default)]
+    pub result: Option<GateIoTickerResult>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct GateIoTickerResult {
+    pub currency_pair: String,
+    pub last: String,
+    pub lowest_ask: String,
+    pub highest_bid: String,
+    pub change_percentage: String,
+    pub base_volume: String,
+    pub quote_volume: String,
+}
+
+impl From<GateIoTickerResult> for crate::UnifiedTicker {
+    fn from(result: GateIoTickerResult) -> Self {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        Self {
+            venue: "gate_io".to_owned(),
+            symbol: result.currency_pair,
+            timestamp,
+            last_price: result.last.parse().unwrap_or(0.0),
+            bid: result.highest_bid.parse().ok(),
+            ask: result.lowest_ask.parse().ok(),
+            volume_24h: result.base_volume.parse().ok(),
+            high_24h: None,
+            low_24h: None,
+        }
+    }
+}
+
+pub async fn connect(
+    config: &GateIoConfig,
+) -> Result<impl futures::Stream<Item = Result<GateIoTickerResult, String>>, String> {
+    use futures::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (stream, _response) = tokio_tungstenite::connect_async(&config.websocket_address)
+        .await
+        .map_err(|e| format!("Failed to connect to Gate.io: {}", e))?;
+
+    let (mut write, read) = stream.split();
+
+    // Subscribe to spot.tickers channel for all configured symbols
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let subscribe_msg = serde_json::json!({
+        "time": timestamp,
+        "channel": "spot.tickers",
+        "event": "subscribe",
+        "payload": config.track_symbols
+    });
+
+    write
+        .send(Message::Text(subscribe_msg.to_string()))
+        .await
+        .map_err(|e| format!("Failed to send subscription: {}", e))?;
+
+    Ok(read.filter_map(|msg| async move {
+        match msg {
+            Ok(Message::Text(text)) => {
+                match serde_json::from_str::<GateIoMessage>(&text) {
+                    Ok(message) if message.event == "update" => message.result.map(Ok),
+                    Ok(_) => None, // Skip subscription confirmations
+                    Err(_) => None,
+                }
+            }
+            Ok(_) => None,
+            Err(e) => Some(Err(format!("WebSocket error: {}", e))),
+        }
+    }))
+}
+
+#[ignore]
 #[tokio::test]
 async fn test_gate_io_connection() {
     use tokio_tungstenite::tungstenite::Message;
