@@ -19,7 +19,6 @@ use matching_engine::asset_pair::BaseQuote;
 use matching_engine::order_ticket::OrderTicket;
 use matching_engine::order_uuid::OrderUuid;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;

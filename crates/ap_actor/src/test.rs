@@ -12,7 +12,6 @@ use matching_engine::orderbook::OrderSide;
 use matching_engine::orderbook::OrderType;
 use matching_engine::price::Price;
 use matching_engine::time::Time;
-use sqlx::types::time::PrimitiveDateTime;
 use tokio::sync::mpsc;
 
 pub struct TestUser {
@@ -186,12 +185,10 @@ pub async fn test_ap_actor_fixture(pg_pool: &sqlx::PgPool) -> TestFixture {
     .await
     .unwrap();
 
-    let (symbol_vocabulary, ap_info) = launch_processors_for_pairs(
-        vec![asset_pair_row.clone()],
-        pg_pool.clone(),
-    )
-    .await
-    .unwrap();
+    let (symbol_vocabulary, ap_info) =
+        launch_processors_for_pairs(vec![asset_pair_row.clone()], pg_pool.clone())
+            .await
+            .unwrap();
 
     let ap_sender = ap_info.first().unwrap().mpsc_sender.clone();
 

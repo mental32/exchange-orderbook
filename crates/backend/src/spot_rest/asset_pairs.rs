@@ -11,6 +11,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use futures::StreamExt as _;
 use matching_engine::asset_pair::AssetPairRow;
+use matching_engine::asset_pair::BaseQuote;
 use matching_engine::decimal::Decimal;
 use sqlx::prelude::FromRow;
 use std::collections::BTreeMap;
@@ -113,9 +114,9 @@ pub async fn f(
         Either::Left(Json(t)) | Either::Right(Parts(Query(t))) => t,
     };
 
-    let normalized_pairs = order_management
+    let normalized_pairs: Vec<BaseQuote> = order_management
         .get_active_processors()
-        .map(|proc_handle: ProcHandle| todo!())
+        .map(|proc_handle: &ProcHandle| proc_handle.base_quote.clone())
         .collect();
 
     let mut query_builder = sqlx::QueryBuilder::new(
@@ -145,9 +146,9 @@ pub async fn f(
         }
         [(base, quote)] => {
             query_builder.push("(base_asset = ");
-            query_builder.push_bind(base);
+            query_builder.push_bind(base.as_str());
             query_builder.push(" AND quote_asset = ");
-            query_builder.push_bind(quote);
+            query_builder.push_bind(quote.as_str());
             query_builder.push(")");
         }
         many => {
@@ -158,9 +159,9 @@ pub async fn f(
                     query_builder.push(" OR ");
                 }
                 query_builder.push("(base_asset = ");
-                query_builder.push_bind(base);
+                query_builder.push_bind(base.as_str());
                 query_builder.push(" AND quote_asset = ");
-                query_builder.push_bind(quote);
+                query_builder.push_bind(quote.as_str());
                 query_builder.push(")");
                 first = false;
             }

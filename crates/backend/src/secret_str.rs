@@ -39,4 +39,3 @@ where
 
     d.deserialize_string(St).map(SecretStr)
 }
-
