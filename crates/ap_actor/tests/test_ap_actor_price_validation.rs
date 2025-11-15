@@ -13,18 +13,19 @@ use matching_engine::order_uuid::OrderUuid;
 use matching_engine::orderbook::OrderSide;
 use matching_engine::orderbook::OrderType;
 use matching_engine::price::Price;
+use std::str::FromStr;
 use tokio::sync::oneshot;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_ap_actor_price_validation(pg_pool: sqlx::PgPool) {
+    let user = TestUser::random().create(&pg_pool).await;
+
     let TestFixture {
         symbol_vocabulary: vocab,
         ap_sender,
         btc_usd,
         ..
     } = test_ap_actor_fixture(&pg_pool).await;
-
-    let user = TestUser::random().create(&pg_pool).await;
 
     let relative_price_order = MsgIn::PlaceOrder(PlaceOrderArgs {
         base_quote: (
@@ -57,11 +58,7 @@ async fn test_ap_actor_price_validation(pg_pool: sqlx::PgPool) {
             .unwrap();
         resp_rx.await.unwrap()
     };
-    assert!(
-        matches!(resp, Err(MsgError::NoReferencePrice)),
-        "Relative price with no last_traded_price should return NoReferencePrice, got: {:?}",
-        resp
-    );
+    assert_eq!(resp, Err(MsgError::NoReferencePrice));
 
     let zero_price_order = MsgIn::PlaceOrder(PlaceOrderArgs {
         base_quote: btc_usd.clone(),
@@ -88,11 +85,7 @@ async fn test_ap_actor_price_validation(pg_pool: sqlx::PgPool) {
         ap_sender.send((resp_tx, zero_price_order)).await.unwrap();
         resp_rx.await.unwrap()
     };
-    assert!(
-        matches!(resp, Err(MsgError::InvalidPrice)),
-        "Zero price should return InvalidPrice, got: {:?}",
-        resp
-    );
+    assert_eq!(resp, Err(MsgError::InvalidPrice));
 
     let validate_only_order = MsgIn::PlaceOrder(PlaceOrderArgs {
         base_quote: btc_usd.clone(),
@@ -122,9 +115,5 @@ async fn test_ap_actor_price_validation(pg_pool: sqlx::PgPool) {
             .unwrap();
         resp_rx.await.unwrap()
     };
-    assert!(
-        matches!(resp, Ok(MsgOut::OrderValidated)),
-        "Validate-only order should return ValidatedOrder, got: {:?}",
-        resp
-    );
+    assert_eq!(resp, Ok(MsgOut::OrderValidated));
 }

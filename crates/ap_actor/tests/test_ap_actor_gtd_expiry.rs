@@ -20,11 +20,11 @@ use tokio::sync::oneshot;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_ap_actor_gtd_order_expiry(pg_pool: sqlx::PgPool) {
+    let user = TestUser::random().create(&pg_pool).await;
+
     let TestFixture {
         btc_usd, ap_sender, ..
     } = test_ap_actor_fixture(&pg_pool).await;
-
-    let user = TestUser::random().create(&pg_pool).await;
 
     let initial_usd_balance = user.balance(&pg_pool, user.usd_account_id).await;
 
@@ -63,14 +63,13 @@ async fn test_ap_actor_gtd_order_expiry(pg_pool: sqlx::PgPool) {
 
     let resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, gtd_buy_order)).await.unwrap();
+        ap_sender
+            .send((resp_tx, gtd_buy_order.clone()))
+            .await
+            .unwrap();
         resp_rx.await.unwrap()
     };
-    assert!(
-        matches!(resp, Ok(MsgOut::OrderPlaced { .. })),
-        "GTD buy order should be placed successfully, got: {:?}",
-        resp
-    );
+    assert_eq!(resp, Ok(MsgOut::OrderPlaced));
 
     let balance_after_place = user.balance(&pg_pool, user.usd_account_id).await;
 
@@ -135,11 +134,7 @@ async fn test_ap_actor_gtd_order_expiry(pg_pool: sqlx::PgPool) {
         ap_sender.send((resp_tx, cancel_expired_msg)).await.unwrap();
         resp_rx.await.unwrap()
     };
-    assert!(
-        matches!(resp, Err(MsgError::OrderNotFound)),
-        "Trying to cancel already-expired order should return OrderNotFound, got: {:?}",
-        resp
-    );
+    assert_eq!(resp, Err(MsgError::OrderNotFound));
 
     let initial_btc_balance = user.balance(&pg_pool, user.btc_account_id).await;
 
@@ -178,14 +173,13 @@ async fn test_ap_actor_gtd_order_expiry(pg_pool: sqlx::PgPool) {
 
     let resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, gtd_sell_order)).await.unwrap();
+        ap_sender
+            .send((resp_tx, gtd_sell_order.clone()))
+            .await
+            .unwrap();
         resp_rx.await.unwrap()
     };
-    assert!(
-        matches!(resp, Ok(MsgOut::OrderPlaced { .. })),
-        "GTD sell order should be placed successfully, got: {:?}",
-        resp
-    );
+    assert_eq!(resp, Ok(MsgOut::OrderPlaced));
 
     let btc_balance_after_place = user.balance(&pg_pool, user.btc_account_id).await;
 
@@ -257,10 +251,7 @@ async fn test_ap_actor_gtd_order_expiry(pg_pool: sqlx::PgPool) {
         ap_sender.send((resp_tx, manual_order)).await.unwrap();
         resp_rx.await.unwrap()
     };
-    assert!(
-        matches!(resp, Ok(MsgOut::OrderPlaced { .. })),
-        "Order with long GTD should be placed successfully"
-    );
+    assert_eq!(resp, Ok(MsgOut::OrderPlaced));
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
@@ -274,9 +265,12 @@ async fn test_ap_actor_gtd_order_expiry(pg_pool: sqlx::PgPool) {
         ap_sender.send((resp_tx, cancel_msg)).await.unwrap();
         resp_rx.await.unwrap()
     };
-    assert!(
-        matches!(resp, Ok(MsgOut::OrderCancelled { .. })),
-        "Manual cancel before expiry should succeed"
+    assert_eq!(
+        resp,
+        Ok(MsgOut::OrderCancelled {
+            success: vec![manual_uuid],
+            failed: vec![]
+        })
     );
 
     let manual_refund_count = sqlx::query_scalar!(
@@ -327,10 +321,13 @@ async fn test_ap_actor_gtd_order_expiry(pg_pool: sqlx::PgPool) {
 
     let resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, order_a)).await.unwrap();
-        resp_rx.await.unwrap()
+        ap_sender
+            .send((resp_tx, gtd_buy_order.clone()))
+            .await
+            .unwrap();
+        resp_rx.await.unwrap().unwrap()
     };
-    assert!(matches!(resp, Ok(MsgOut::OrderPlaced { .. })));
+    assert_eq!(resp, MsgOut::OrderPlaced);
 
     let expiry = time::SystemTime::now()
         .duration_since(time::UNIX_EPOCH)
@@ -361,10 +358,13 @@ async fn test_ap_actor_gtd_order_expiry(pg_pool: sqlx::PgPool) {
 
     let resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, order_b)).await.unwrap();
-        resp_rx.await.unwrap()
+        ap_sender
+            .send((resp_tx, gtd_sell_order.clone()))
+            .await
+            .unwrap();
+        resp_rx.await.unwrap().unwrap()
     };
-    assert!(matches!(resp, Ok(MsgOut::OrderPlaced { .. })));
+    assert_eq!(resp, MsgOut::OrderPlaced);
 
     let balance_with_two_orders = user.balance(&pg_pool, user.usd_account_id).await;
 

@@ -24,7 +24,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PlaceOrderArgs {
     pub base_quote: BaseQuote,
     pub user_id: VirtualUserId,
@@ -32,11 +32,18 @@ pub struct PlaceOrderArgs {
     pub order_details: OrderTicket,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum CancelOrderBy {
     TxId(OrderUuid),
     Userref(u32),
     ClientOrderId(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetClass {
+    Currency,
+    TokenizedAsset,
 }
 
 pub type CancelOrderError = ((), &'static str);
@@ -85,23 +92,8 @@ impl OrderManagement {
             .map(|i| i.base_quote.clone())
     }
 
-    pub fn get_enabled_assets(&self) -> Vec<String> {
-        let mut assets = HashSet::new();
-        for processor in &self.inner.asset_processors {
-            assets.insert(processor.base_quote.0.as_str().to_string());
-            assets.insert(processor.base_quote.1.as_str().to_string());
-        }
-        let mut result: Vec<_> = assets.into_iter().collect();
-        result.sort();
-        result
-    }
-
-    pub fn get_enabled_pairs(&self) -> Vec<BaseQuote> {
-        self.inner
-            .asset_processors
-            .iter()
-            .map(|p| p.base_quote.clone())
-            .collect()
+    pub fn get_active_processors(&self) -> impl Iterator<Item = &ProcHandle> {
+        self.inner.asset_processors.iter()
     }
 
     pub fn open_orders_for(&self, user_id: &VirtualUserId) -> Vec<OpenOrder> {
@@ -277,7 +269,8 @@ impl OrderManagement {
             MsgOut::OrderCancelled { .. }
             | MsgOut::OrderAmended { .. }
             | MsgOut::OrderSnapshot { .. }
-            | MsgOut::StatusChanged(_) => {
+            | MsgOut::StatusChanged(_)
+            | MsgOut::ShutdownAcknowledged => {
                 unreachable!("bug: these outputs should never be received")
             }
         }

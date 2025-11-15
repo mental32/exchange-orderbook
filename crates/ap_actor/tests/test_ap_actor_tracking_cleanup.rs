@@ -15,16 +15,13 @@ use matching_engine::orderbook::OrderType;
 use matching_engine::price::Price;
 use tokio::sync::oneshot;
 
-/// This test verifies that cancelled orders are properly removed from tracking state.
-/// If the extract_if bug existed (iterator not consumed), this test would fail because
-/// the cancelled order would still be in tracking and subsequent operations would panic.
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_ap_actor_tracking_cleanup(pg_pool: sqlx::PgPool) {
+    let user = TestUser::random().create(&pg_pool).await;
+
     let TestFixture {
         btc_usd, ap_sender, ..
     } = test_ap_actor_fixture(&pg_pool).await;
-
-    let user = TestUser::random().create(&pg_pool).await;
 
     // Step 1: Place an order
     let order1_uuid = OrderUuid(uuid::Uuid::new_v4());
@@ -55,7 +52,7 @@ async fn test_ap_actor_tracking_cleanup(pg_pool: sqlx::PgPool) {
         ap_sender.send((resp_tx, order1_msg)).await.unwrap();
         resp_rx.await.unwrap()
     };
-    assert!(matches!(resp1, Ok(MsgOut::OrderPlaced { .. })));
+    assert_eq!(resp1, Ok(MsgOut::OrderPlaced));
 
     let balance_after_order1 = user.balance(&pg_pool, user.usd_account_id).await;
     assert_eq!(
@@ -76,13 +73,13 @@ async fn test_ap_actor_tracking_cleanup(pg_pool: sqlx::PgPool) {
         resp_rx.await.unwrap()
     };
 
-    match cancel_resp {
-        Ok(MsgOut::OrderCancelled { success, failed }) => {
-            assert_eq!(success.len(), 1);
-            assert_eq!(failed.len(), 0);
-        }
-        other => panic!("Expected OrderCancelled, got: {:?}", other),
-    }
+    assert_eq!(
+        cancel_resp,
+        Ok(MsgOut::OrderCancelled {
+            success: vec![order1_uuid],
+            failed: vec![]
+        })
+    );
 
     let balance_after_cancel = user.balance(&pg_pool, user.usd_account_id).await;
     assert_eq!(
@@ -124,10 +121,7 @@ async fn test_ap_actor_tracking_cleanup(pg_pool: sqlx::PgPool) {
         ap_sender.send((resp_tx, order2_msg)).await.unwrap();
         resp_rx.await.unwrap()
     };
-    assert!(
-        matches!(resp2, Ok(MsgOut::OrderPlaced { .. })),
-        "Should be able to place new order after cancelling previous one"
-    );
+    assert_eq!(resp2, Ok(MsgOut::OrderPlaced));
 
     // Step 5: Cancel by userref - should ONLY cancel order2, not the ghost of order1
     let cancel_by_userref_msg = MsgIn::CancelOrderBy(CancelOrderByArgs {
@@ -146,22 +140,13 @@ async fn test_ap_actor_tracking_cleanup(pg_pool: sqlx::PgPool) {
 
     // This is the critical assertion - if tracking cleanup failed, this would panic
     // because it would try to access order1 from the orderbook (which was removed)
-    match cancel_userref_resp {
-        Ok(MsgOut::OrderCancelled { success, failed }) => {
-            assert_eq!(
-                success.len(),
-                1,
-                "Should cancel exactly 1 order (order2), not 2"
-            );
-            assert_eq!(
-                success[0], order2_uuid,
-                "Should cancel order2, not the ghost of order1"
-            );
-            assert_eq!(failed.len(), 0, "Should have no failures");
-        }
-        Err(e) => panic!("Expected success, got error: {:?}", e),
-        Ok(other) => panic!("Expected OrderCancelled, got: {:?}", other),
-    }
+    assert_eq!(
+        cancel_userref_resp,
+        Ok(MsgOut::OrderCancelled {
+            success: vec![order2_uuid],
+            failed: vec![]
+        })
+    );
 
     let final_balance = user.balance(&pg_pool, user.usd_account_id).await;
     assert_eq!(

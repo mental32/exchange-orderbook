@@ -17,12 +17,12 @@ use tokio::sync::oneshot;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_ap_actor_partial_fill_cancel(pg_pool: sqlx::PgPool) {
+    let user1 = TestUser::random().create(&pg_pool).await;
+    let user2 = TestUser::random().create(&pg_pool).await;
+
     let TestFixture {
         btc_usd, ap_sender, ..
     } = test_ap_actor_fixture(&pg_pool).await;
-
-    let user1 = TestUser::random().create(&pg_pool).await;
-    let user2 = TestUser::random().create(&pg_pool).await;
 
     let initial_usd = user2.balance(&pg_pool, user2.usd_account_id).await;
     let initial_btc = user1.balance(&pg_pool, user1.btc_account_id).await;
@@ -55,9 +55,9 @@ async fn test_ap_actor_partial_fill_cancel(pg_pool: sqlx::PgPool) {
     let maker_resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
         ap_sender.send((resp_tx, maker_msg)).await.unwrap();
-        resp_rx.await.unwrap()
+        resp_rx.await.unwrap().unwrap()
     };
-    assert!(matches!(maker_resp, Ok(MsgOut::OrderPlaced { .. })));
+    assert_eq!(maker_resp, MsgOut::OrderPlaced);
 
     let btc_after_maker = user1.balance(&pg_pool, user1.btc_account_id).await;
     assert_eq!(
@@ -93,9 +93,9 @@ async fn test_ap_actor_partial_fill_cancel(pg_pool: sqlx::PgPool) {
     let taker_resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
         ap_sender.send((resp_tx, taker_msg)).await.unwrap();
-        resp_rx.await.unwrap()
+        resp_rx.await.unwrap().unwrap()
     };
-    assert!(matches!(taker_resp, Ok(MsgOut::OrderPlaced { .. })));
+    assert_eq!(taker_resp, MsgOut::OrderPlaced);
 
     let btc_after_fill = user2.balance(&pg_pool, user2.btc_account_id).await;
     let usd_after_fill = user2.balance(&pg_pool, user2.usd_account_id).await;
@@ -122,17 +122,13 @@ async fn test_ap_actor_partial_fill_cancel(pg_pool: sqlx::PgPool) {
         resp_rx.await.unwrap()
     };
 
-    match cancel_resp {
-        Ok(MsgOut::OrderCancelled { success, failed }) => {
-            assert_eq!(success.len(), 1, "Should cancel 1 order");
-            assert_eq!(
-                success[0], maker_order_uuid,
-                "Should cancel the maker order"
-            );
-            assert_eq!(failed.len(), 0, "Should have no failures");
-        }
-        other => panic!("Expected OrderCancelled, got: {:?}", other),
-    }
+    assert_eq!(
+        cancel_resp,
+        Ok(MsgOut::OrderCancelled {
+            success: vec![maker_order_uuid],
+            failed: vec![]
+        })
+    );
 
     // Step 4: Verify refund is ONLY for the unfilled portion (0.4 BTC)
     let btc_refund = sqlx::query_scalar!(

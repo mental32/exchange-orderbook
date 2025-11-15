@@ -4,24 +4,23 @@ use ap_actor::proc::MsgOut;
 use ap_actor::test::TestFixture;
 use ap_actor::test::TestUser;
 use ap_actor::test::test_ap_actor_fixture;
-use matching_engine::decimal::dec;
-use matching_engine::order_uuid::OrderUuid;
-use tokio::sync::oneshot;
-
 use matching_engine::decimal::NonZeroDecimal;
+use matching_engine::decimal::dec;
 use matching_engine::order_ticket::OrderTicket;
+use matching_engine::order_uuid::OrderUuid;
 use matching_engine::orderbook::OrderSide;
 use matching_engine::orderbook::OrderType;
 use matching_engine::price::Price;
+use tokio::sync::oneshot;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_take_profit_sell_triggers_on_price_rise(pg_pool: sqlx::PgPool) {
+    let user1 = TestUser::random().create(&pg_pool).await;
+    let user2 = TestUser::random().create(&pg_pool).await;
+
     let TestFixture {
         ap_sender, btc_usd, ..
     } = test_ap_actor_fixture(&pg_pool).await;
-
-    let user1 = TestUser::random().create(&pg_pool).await;
-    let user2 = TestUser::random().create(&pg_pool).await;
 
     // User 1 places a limit buy at 50k
 

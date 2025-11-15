@@ -18,11 +18,11 @@ use tokio::sync::oneshot;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_ap_actor_cancel_msgout_verification(pg_pool: sqlx::PgPool) {
+    let user = TestUser::random().create(&pg_pool).await;
+
     let TestFixture {
         btc_usd, ap_sender, ..
     } = test_ap_actor_fixture(&pg_pool).await;
-
-    let user = TestUser::random().create(&pg_pool).await;
 
     let order_uuid = OrderUuid(uuid::Uuid::new_v4());
 
@@ -49,9 +49,9 @@ async fn test_ap_actor_cancel_msgout_verification(pg_pool: sqlx::PgPool) {
     let place_resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
         ap_sender.send((resp_tx, place_msg)).await.unwrap();
-        resp_rx.await.unwrap()
+        resp_rx.await.unwrap().unwrap()
     };
-    assert!(matches!(place_resp, Ok(MsgOut::OrderPlaced { .. })));
+    assert_eq!(place_resp, MsgOut::OrderPlaced);
 
     // Cancel the order and verify MsgOut structure
     let cancel_msg = MsgIn::CancelOrderBy(CancelOrderByArgs {
@@ -62,29 +62,17 @@ async fn test_ap_actor_cancel_msgout_verification(pg_pool: sqlx::PgPool) {
     let cancel_resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
         ap_sender.send((resp_tx, cancel_msg)).await.unwrap();
-        resp_rx.await.unwrap()
+        resp_rx.await.unwrap().unwrap()
     };
 
-    // Destructure and verify the response
-    match cancel_resp {
-        Ok(MsgOut::OrderCancelled { success, failed }) => {
-            // Verify success vec contains exactly the cancelled order UUID
-            assert_eq!(
-                success.len(),
-                1,
-                "Should have exactly 1 successful cancellation"
-            );
-            assert_eq!(
-                success[0], order_uuid,
-                "Success vec should contain the cancelled order UUID"
-            );
-
-            // Verify failed vec is empty
-            assert_eq!(failed.len(), 0, "Should have no failed cancellations");
+    // Verify the response
+    assert_eq!(
+        cancel_resp,
+        MsgOut::OrderCancelled {
+            success: vec![order_uuid.clone()],
+            failed: vec![]
         }
-        Ok(other) => panic!("Expected OrderCancelled, got: {:?}", other),
-        Err(e) => panic!("Expected success, got error: {:?}", e),
-    }
+    );
 
     // Test error case: cancel non-existent order
     let bogus_uuid = OrderUuid(uuid::Uuid::new_v4());
@@ -100,9 +88,5 @@ async fn test_ap_actor_cancel_msgout_verification(pg_pool: sqlx::PgPool) {
     };
 
     // Verify error response
-    assert!(
-        matches!(cancel_bogus_resp, Err(MsgError::OrderNotFound)),
-        "Cancelling non-existent order should return OrderNotFound, got: {:?}",
-        cancel_bogus_resp
-    );
+    assert_eq!(cancel_bogus_resp, Err(MsgError::OrderNotFound));
 }

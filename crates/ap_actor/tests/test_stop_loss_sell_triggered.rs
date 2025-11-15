@@ -6,28 +6,39 @@ use ap_actor::proc::MsgOut;
 use ap_actor::test::TestFixture;
 use ap_actor::test::TestUser;
 use ap_actor::test::test_ap_actor_fixture;
+use matching_engine::decimal::NonZeroDecimal;
 use matching_engine::decimal::dec;
+use matching_engine::order_ticket::OrderTicket;
 use matching_engine::order_uuid::OrderUuid;
+use matching_engine::orderbook::OrderSide;
+use matching_engine::orderbook::OrderType;
+use matching_engine::price::Price;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_stop_loss_sell_triggered(pg_pool: sqlx::PgPool) {
+    let user1 = TestUser::random().create(&pg_pool).await;
+    let user2 = TestUser::random().create(&pg_pool).await;
+
     let TestFixture {
         btc_usd, ap_sender, ..
     } = test_ap_actor_fixture(&pg_pool).await;
 
-    let user1 = TestUser::random().create(&pg_pool).await;
-    let user2 = TestUser::random().create(&pg_pool).await;
-
     // Step 1: Establish last_traded_price at $50,000 using crossing limit orders
     // User 1 places sell limit at $50k
-    let sell_limit_json = serde_json::json!({
-        "nonce": 100000,
-        "type": "sell",
-        "ordertype": "limit",
-        "volume": "1.0",
-        "pair": "BTC/USD",
-        "price": "50000"
-    });
+    let sell_limit_order_details = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Sell,
+        Price {
+            prefix: None,
+            amount: dec!(50000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(1.0)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(1.0)).unwrap())
+    .volume(dec!(1.0))
+    .build()
+    .unwrap();
 
     let resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
@@ -38,24 +49,30 @@ async fn test_stop_loss_sell_triggered(pg_pool: sqlx::PgPool) {
                     base_quote: btc_usd.clone(),
                     user_id: user1.user_id.clone(),
                     order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: serde_json::from_value(sell_limit_json).unwrap(),
+                    order_details: sell_limit_order_details,
                 }),
             ))
             .await
             .unwrap();
-        resp_rx.await.unwrap()
+        resp_rx.await.unwrap().unwrap()
     };
-    assert!(matches!(resp, Ok(MsgOut::OrderPlaced)));
+    assert_eq!(resp, MsgOut::OrderPlaced);
 
     // User 2 places buy limit at $50k (crosses with user 1's sell limit)
-    let buy_limit_json = serde_json::json!({
-        "nonce": 100001,
-        "type": "buy",
-        "ordertype": "limit",
-        "volume": "0.01",
-        "pair": "BTC/USD",
-        "price": "50000"
-    });
+    let buy_limit_order_details = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Buy,
+        Price {
+            prefix: None,
+            amount: dec!(50000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .volume(dec!(0.01))
+    .build()
+    .unwrap();
 
     let resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
@@ -66,29 +83,30 @@ async fn test_stop_loss_sell_triggered(pg_pool: sqlx::PgPool) {
                     base_quote: btc_usd.clone(),
                     user_id: user2.user_id.clone(),
                     order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: serde_json::from_value(buy_limit_json).unwrap(),
+                    order_details: buy_limit_order_details,
                 }),
             ))
             .await
             .unwrap();
-        resp_rx.await.unwrap()
+        resp_rx.await.unwrap().unwrap()
     };
-    assert!(
-        matches!(resp, Ok(MsgOut::OrderPlaced)),
-        "Buy limit should cross and establish last_traded_price, got: {:?}",
-        resp
-    );
+    assert_eq!(resp, MsgOut::OrderPlaced);
 
     // Step 2: Place StopLoss sell order with trigger at $48,000
-    let stop_loss_sell_json = serde_json::json!({
-        "nonce": 100002,
-        "type": "sell",
-        "ordertype": "stop-loss",
-        "volume": "0.1",
-        "pair": "BTC/USD",
-        "price": "48000",
-        "trigger": "Last"
-    });
+    let stop_loss_sell_order_details = OrderTicket::builder(
+        OrderType::StopLoss,
+        OrderSide::Sell,
+        Price {
+            prefix: None,
+            amount: dec!(48000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
+    .volume(dec!(0.1))
+    .build()
+    .unwrap();
 
     let stop_loss_uuid = OrderUuid(uuid::Uuid::new_v4());
     let resp = {
@@ -100,17 +118,14 @@ async fn test_stop_loss_sell_triggered(pg_pool: sqlx::PgPool) {
                     base_quote: btc_usd.clone(),
                     user_id: user1.user_id.clone(),
                     order_uuid: stop_loss_uuid.clone(),
-                    order_details: serde_json::from_value(stop_loss_sell_json).unwrap(),
+                    order_details: stop_loss_sell_order_details,
                 }),
             ))
             .await
             .unwrap();
-        resp_rx.await.unwrap()
+        resp_rx.await.unwrap().unwrap()
     };
-    assert!(
-        matches!(resp, Ok(MsgOut::OrderPlaced)),
-        "StopLoss order should be placed"
-    );
+    assert_eq!(resp, MsgOut::OrderPlaced);
 
     // Step 3: Verify BTC reserved (balance drops from 10 to 9.9)
     let btc_balance = user1.balance(&pg_pool, user1.btc_account_id).await;
@@ -123,14 +138,20 @@ async fn test_stop_loss_sell_triggered(pg_pool: sqlx::PgPool) {
 
     // Step 4: Place market sell to drop price below trigger ($48,000)
     // First user 2 places buy limit at $47,500
-    let buy_limit_json = serde_json::json!({
-        "nonce": 100003,
-        "type": "buy",
-        "ordertype": "limit",
-        "volume": "1.0",
-        "pair": "BTC/USD",
-        "price": "47500"
-    });
+    let buy_limit_order_details = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Buy,
+        Price {
+            prefix: None,
+            amount: dec!(47500),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(1.0)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(1.0)).unwrap())
+    .volume(dec!(1.0))
+    .build()
+    .unwrap();
 
     let resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
@@ -141,24 +162,30 @@ async fn test_stop_loss_sell_triggered(pg_pool: sqlx::PgPool) {
                     base_quote: btc_usd.clone(),
                     user_id: user2.user_id.clone(),
                     order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: serde_json::from_value(buy_limit_json).unwrap(),
+                    order_details: buy_limit_order_details,
                 }),
             ))
             .await
             .unwrap();
-        resp_rx.await.unwrap()
+        resp_rx.await.unwrap().unwrap()
     };
-    assert!(matches!(resp, Ok(MsgOut::OrderPlaced)));
+    assert_eq!(resp, MsgOut::OrderPlaced);
 
     // Now user 1 sells at $47.5k to trigger the stop-loss (price drops below $48k)
-    let sell_trigger_json = serde_json::json!({
-        "nonce": 100004,
-        "type": "sell",
-        "ordertype": "limit",
-        "volume": "0.01",
-        "pair": "BTC/USD",
-        "price": "47500"
-    });
+    let sell_trigger_order_details = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Sell,
+        Price {
+            prefix: None,
+            amount: dec!(47500),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .volume(dec!(0.01))
+    .build()
+    .unwrap();
 
     let resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
@@ -169,18 +196,14 @@ async fn test_stop_loss_sell_triggered(pg_pool: sqlx::PgPool) {
                     base_quote: btc_usd.clone(),
                     user_id: user1.user_id.clone(),
                     order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: serde_json::from_value(sell_trigger_json).unwrap(),
+                    order_details: sell_trigger_order_details,
                 }),
             ))
             .await
             .unwrap();
-        resp_rx.await.unwrap()
+        resp_rx.await.unwrap().unwrap()
     };
-    assert!(
-        matches!(resp, Ok(MsgOut::OrderPlaced)),
-        "Sell limit should cross and trigger stop-loss, got: {:?}",
-        resp
-    );
+    assert_eq!(resp, MsgOut::OrderPlaced);
 
     // Give async trigger check time to execute
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;

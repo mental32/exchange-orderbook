@@ -1,5 +1,3 @@
-use tokio::sync::oneshot;
-
 use ap_actor::order_management::PlaceOrderArgs;
 use ap_actor::proc::MsgIn;
 use ap_actor::proc::MsgOut;
@@ -14,9 +12,14 @@ use matching_engine::order_uuid::OrderUuid;
 use matching_engine::orderbook::OrderSide;
 use matching_engine::orderbook::OrderType;
 use matching_engine::price::Price;
+use std::str::FromStr;
+use tokio::sync::oneshot;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
+    let user1 = TestUser::random().create(&pg_pool).await;
+    let user2 = TestUser::random().create(&pg_pool).await;
+
     let TestFixture {
         symbol_vocabulary,
         exchange_usd_account_id,
@@ -24,9 +27,6 @@ async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
         ap_sender,
         ..
     } = test_ap_actor_fixture(&pg_pool).await;
-
-    let user1 = TestUser::random().create(&pg_pool).await;
-    let user2 = TestUser::random().create(&pg_pool).await;
 
     let sell_order = MsgIn::PlaceOrder(PlaceOrderArgs {
         base_quote: (

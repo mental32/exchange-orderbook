@@ -1,5 +1,3 @@
-use tokio::sync::oneshot;
-
 use ap_actor::order_management::PlaceOrderArgs;
 use ap_actor::proc::MsgIn;
 use ap_actor::proc::MsgOut;
@@ -13,14 +11,15 @@ use matching_engine::order_uuid::OrderUuid;
 use matching_engine::orderbook::OrderSide;
 use matching_engine::orderbook::OrderType;
 use matching_engine::price::Price;
+use tokio::sync::oneshot;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_ap_actor_order_placement(pg_pool: sqlx::PgPool) {
+    let user = TestUser::random().create(&pg_pool).await;
+
     let TestFixture {
         ap_sender, btc_usd, ..
     } = test_ap_actor_fixture(&pg_pool).await;
-
-    let user = TestUser::random().create(&pg_pool).await;
 
     let limit_buy_order = MsgIn::PlaceOrder(PlaceOrderArgs {
         base_quote: btc_usd.clone(),
@@ -47,11 +46,7 @@ async fn test_ap_actor_order_placement(pg_pool: sqlx::PgPool) {
         ap_sender.send((resp_tx, limit_buy_order)).await.unwrap();
         resp_rx.await.unwrap()
     };
-    assert!(
-        matches!(resp, Ok(MsgOut::OrderPlaced { .. })),
-        "Limit buy order should be placed successfully, got: {:?}",
-        resp
-    );
+    assert_eq!(resp, Ok(MsgOut::OrderPlaced));
 
     let event_count = sqlx::query_scalar!("SELECT COUNT(*) FROM t_trading_event_source")
         .fetch_one(&pg_pool)

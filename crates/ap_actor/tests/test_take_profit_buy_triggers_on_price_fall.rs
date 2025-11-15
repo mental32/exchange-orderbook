@@ -16,12 +16,12 @@ use matching_engine::price::Price;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_take_profit_buy_triggers_on_price_fall(pg_pool: sqlx::PgPool) {
+    let user1 = TestUser::random().create(&pg_pool).await;
+    let user2 = TestUser::random().create(&pg_pool).await;
+
     let TestFixture {
         ap_sender, btc_usd, ..
     } = test_ap_actor_fixture(&pg_pool).await;
-
-    let user1 = TestUser::random().create(&pg_pool).await;
-    let user2 = TestUser::random().create(&pg_pool).await;
 
     // User 1 places a limit sell at 50k (to set market price)
     let limit_sell = MsgIn::PlaceOrder(PlaceOrderArgs {
@@ -80,10 +80,7 @@ async fn test_take_profit_buy_triggers_on_price_fall(pg_pool: sqlx::PgPool) {
         ap_sender.send((resp_tx, take_profit_buy)).await.unwrap();
         resp_rx.await.unwrap()
     };
-    assert!(
-        matches!(resp, Ok(MsgOut::OrderPlaced)),
-        "TakeProfit buy should be queued"
-    );
+    assert_eq!(resp, Ok(MsgOut::OrderPlaced));
 
     // Verify USD was reserved (0.1 × 45000 = 4500 USD)
     let usd_balance_user2 = user2.balance(&pg_pool, user2.usd_account_id).await;
@@ -122,10 +119,7 @@ async fn test_take_profit_buy_triggers_on_price_fall(pg_pool: sqlx::PgPool) {
         ap_sender.send((resp_tx, market_buy)).await.unwrap();
         resp_rx.await.unwrap()
     };
-    assert!(
-        matches!(resp, Ok(MsgOut::OrderPlaced)),
-        "Market buy should execute"
-    );
+    assert_eq!(resp, Ok(MsgOut::OrderPlaced));
 
     // User 1 places a limit sell at 45k to push price down and trigger the take-profit
     let trigger_sell = MsgIn::PlaceOrder(PlaceOrderArgs {

@@ -6,28 +6,39 @@ use ap_actor::proc::MsgOut;
 use ap_actor::test::TestFixture;
 use ap_actor::test::TestUser;
 use ap_actor::test::test_ap_actor_fixture;
+use matching_engine::decimal::NonZeroDecimal;
 use matching_engine::decimal::dec;
+use matching_engine::order_ticket::OrderTicket;
 use matching_engine::order_uuid::OrderUuid;
+use matching_engine::orderbook::OrderSide;
+use matching_engine::orderbook::OrderType;
+use matching_engine::price::Price;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_take_profit_limit_does_not_trigger_prematurely(pg_pool: sqlx::PgPool) {
+    let user1 = TestUser::random().create(&pg_pool).await;
+    let user2 = TestUser::random().create(&pg_pool).await;
+
     let TestFixture {
         btc_usd, ap_sender, ..
     } = test_ap_actor_fixture(&pg_pool).await;
 
-    let user1 = TestUser::random().create(&pg_pool).await;
-    let user2 = TestUser::random().create(&pg_pool).await;
-
     // Establish last_traded_price at $50,000 using crossing limit orders
     // User 1 places buy limit at $50k
-    let buy_limit_json = serde_json::json!({
-        "nonce": 160000,
-        "type": "buy",
-        "ordertype": "limit",
-        "volume": "0.01",
-        "pair": "BTC/USD",
-        "price": "50000"
-    });
+    let buy_limit_order_details = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Buy,
+        Price {
+            prefix: None,
+            amount: dec!(50000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .volume(dec!(0.01))
+    .build()
+    .unwrap();
 
     let resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
@@ -38,24 +49,30 @@ async fn test_take_profit_limit_does_not_trigger_prematurely(pg_pool: sqlx::PgPo
                     base_quote: btc_usd.clone(),
                     user_id: user1.user_id.clone(),
                     order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: serde_json::from_value(buy_limit_json).unwrap(),
+                    order_details: buy_limit_order_details,
                 }),
             ))
             .await
             .unwrap();
-        resp_rx.await.unwrap()
+        resp_rx.await.unwrap().unwrap()
     };
-    assert!(matches!(resp, Ok(MsgOut::OrderPlaced)));
+    assert_eq!(resp, MsgOut::OrderPlaced);
 
     // User 2 places sell limit at $50k (crosses with user 1's buy limit)
-    let sell_limit_json = serde_json::json!({
-        "nonce": 160001,
-        "type": "sell",
-        "ordertype": "limit",
-        "volume": "0.01",
-        "pair": "BTC/USD",
-        "price": "50000"
-    });
+    let sell_limit_order_details = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Sell,
+        Price {
+            prefix: None,
+            amount: dec!(50000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .volume(dec!(0.01))
+    .build()
+    .unwrap();
 
     let resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
@@ -66,26 +83,35 @@ async fn test_take_profit_limit_does_not_trigger_prematurely(pg_pool: sqlx::PgPo
                     base_quote: btc_usd.clone(),
                     user_id: user2.user_id.clone(),
                     order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: serde_json::from_value(sell_limit_json).unwrap(),
+                    order_details: sell_limit_order_details,
                 }),
             ))
             .await
             .unwrap();
-        resp_rx.await.unwrap()
+        resp_rx.await.unwrap().unwrap()
     };
-    assert!(matches!(resp, Ok(MsgOut::OrderPlaced)));
+    assert_eq!(resp, MsgOut::OrderPlaced);
 
     // Place TakeProfitLimit sell with trigger at $55,000 and limit at $56,000
-    let take_profit_limit_sell_json = serde_json::json!({
-        "nonce": 160002,
-        "type": "sell",
-        "ordertype": "take-profit-limit",
-        "volume": "0.1",
-        "pair": "BTC/USD",
-        "price": "55000",        // trigger price
-        "price2": "56000",       // limit price
-        "trigger": "Last"
-    });
+    let take_profit_limit_sell_order_details = OrderTicket::builder(
+        OrderType::TakeProfitLimit,
+        OrderSide::Sell,
+        Price {
+            prefix: None,
+            amount: dec!(55000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.05)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.05)).unwrap())
+    .volume(dec!(0.05))
+    .secondary_price(Price {
+        prefix: None,
+        amount: dec!(56000),
+        is_percentage: false,
+    })
+    .build()
+    .unwrap();
 
     let resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
@@ -96,7 +122,7 @@ async fn test_take_profit_limit_does_not_trigger_prematurely(pg_pool: sqlx::PgPo
                     base_quote: btc_usd.clone(),
                     user_id: user1.user_id.clone(),
                     order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: serde_json::from_value(take_profit_limit_sell_json).unwrap(),
+                    order_details: take_profit_limit_sell_order_details,
                 }),
             ))
             .await
@@ -119,14 +145,20 @@ async fn test_take_profit_limit_does_not_trigger_prematurely(pg_pool: sqlx::PgPo
     );
 
     // User 2 places sell limit at $54,000 (BELOW trigger price of $55k)
-    let sell_below_trigger_json = serde_json::json!({
-        "nonce": 160003,
-        "type": "sell",
-        "ordertype": "limit",
-        "volume": "1.0",
-        "pair": "BTC/USD",
-        "price": "54000"
-    });
+    let sell_below_trigger_order_details = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Sell,
+        Price {
+            prefix: None,
+            amount: dec!(54000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .volume(dec!(0.01))
+    .build()
+    .unwrap();
 
     let resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
@@ -137,7 +169,7 @@ async fn test_take_profit_limit_does_not_trigger_prematurely(pg_pool: sqlx::PgPo
                     base_quote: btc_usd.clone(),
                     user_id: user2.user_id.clone(),
                     order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: serde_json::from_value(sell_below_trigger_json).unwrap(),
+                    order_details: sell_below_trigger_order_details,
                 }),
             ))
             .await
@@ -147,14 +179,20 @@ async fn test_take_profit_limit_does_not_trigger_prematurely(pg_pool: sqlx::PgPo
     assert!(matches!(resp, Ok(MsgOut::OrderPlaced)));
 
     // User 1 buys at $54k (still below $55k trigger)
-    let buy_below_trigger_json = serde_json::json!({
-        "nonce": 160004,
-        "type": "buy",
-        "ordertype": "limit",
-        "volume": "0.01",
-        "pair": "BTC/USD",
-        "price": "54000"
-    });
+    let buy_below_trigger_order_details = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Buy,
+        Price {
+            prefix: None,
+            amount: dec!(54000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .volume(dec!(0.01))
+    .build()
+    .unwrap();
 
     let resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
@@ -165,7 +203,7 @@ async fn test_take_profit_limit_does_not_trigger_prematurely(pg_pool: sqlx::PgPo
                     base_quote: btc_usd.clone(),
                     user_id: user1.user_id.clone(),
                     order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: serde_json::from_value(buy_below_trigger_json).unwrap(),
+                    order_details: buy_below_trigger_order_details,
                 }),
             ))
             .await
@@ -193,14 +231,20 @@ async fn test_take_profit_limit_does_not_trigger_prematurely(pg_pool: sqlx::PgPo
 
     // NOW push price to $55k to actually trigger
     // User 2 places sell at $55k
-    let sell_at_trigger_json = serde_json::json!({
-        "nonce": 160005,
-        "type": "sell",
-        "ordertype": "limit",
-        "volume": "1.0",
-        "pair": "BTC/USD",
-        "price": "55000"
-    });
+    let sell_at_trigger_order_details = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Sell,
+        Price {
+            prefix: None,
+            amount: dec!(55000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .volume(dec!(0.01))
+    .build()
+    .unwrap();
 
     let resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
@@ -211,7 +255,7 @@ async fn test_take_profit_limit_does_not_trigger_prematurely(pg_pool: sqlx::PgPo
                     base_quote: btc_usd.clone(),
                     user_id: user2.user_id.clone(),
                     order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: serde_json::from_value(sell_at_trigger_json).unwrap(),
+                    order_details: sell_at_trigger_order_details,
                 }),
             ))
             .await
@@ -221,14 +265,20 @@ async fn test_take_profit_limit_does_not_trigger_prematurely(pg_pool: sqlx::PgPo
     assert!(matches!(resp, Ok(MsgOut::OrderPlaced)));
 
     // User 1 buys at $55k to trigger
-    let buy_at_trigger_json = serde_json::json!({
-        "nonce": 160006,
-        "type": "buy",
-        "ordertype": "limit",
-        "volume": "0.01",
-        "pair": "BTC/USD",
-        "price": "55000"
-    });
+    let buy_at_trigger_order_details = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Buy,
+        Price {
+            prefix: None,
+            amount: dec!(55000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .volume(dec!(0.01))
+    .build()
+    .unwrap();
 
     let resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
@@ -239,7 +289,7 @@ async fn test_take_profit_limit_does_not_trigger_prematurely(pg_pool: sqlx::PgPo
                     base_quote: btc_usd.clone(),
                     user_id: user1.user_id.clone(),
                     order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: serde_json::from_value(buy_at_trigger_json).unwrap(),
+                    order_details: buy_at_trigger_order_details,
                 }),
             ))
             .await
@@ -252,14 +302,21 @@ async fn test_take_profit_limit_does_not_trigger_prematurely(pg_pool: sqlx::PgPo
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // User 2 buys at $56k to fill the triggered limit order
-    let buy_at_limit_json = serde_json::json!({
-        "nonce": 160007,
-        "type": "buy",
-        "ordertype": "limit",
-        "volume": "0.1",
-        "pair": "BTC/USD",
-        "price": "56000"
-    });
+    // User 1 buys at $54k (still below $55k trigger)
+    let buy_limit_order_details = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Buy,
+        Price {
+            prefix: None,
+            amount: dec!(54000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .volume(dec!(0.01))
+    .build()
+    .unwrap();
 
     let resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
@@ -268,16 +325,16 @@ async fn test_take_profit_limit_does_not_trigger_prematurely(pg_pool: sqlx::PgPo
                 resp_tx,
                 MsgIn::PlaceOrder(PlaceOrderArgs {
                     base_quote: btc_usd.clone(),
-                    user_id: user2.user_id.clone(),
+                    user_id: user1.user_id.clone(),
                     order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: serde_json::from_value(buy_at_limit_json).unwrap(),
+                    order_details: buy_limit_order_details,
                 }),
             ))
             .await
             .unwrap();
-        resp_rx.await.unwrap()
+        resp_rx.await.unwrap().unwrap()
     };
-    assert!(matches!(resp, Ok(MsgOut::OrderPlaced)));
+    assert_eq!(resp, MsgOut::OrderPlaced);
 
     // Give execution some time
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;

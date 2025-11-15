@@ -4,10 +4,7 @@ use crate::order_management::PlaceOrderArgs;
 use crate::reserve_money::ReserveByAssetError;
 use crate::user_profile::OpenOrder;
 use crate::user_profile::UserProfile;
-use anyhow::Context as _;
 use futures::StreamExt as _;
-use futures::TryStreamExt as _;
-use futures::stream::FuturesUnordered;
 use itertools::Itertools as _;
 use matching_engine::asset_code::AssetCode;
 use matching_engine::asset_code::SymbolVocabulary;
@@ -82,7 +79,7 @@ pub struct OrderResult {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AmendOrderArgs {
     pub user_id: VirtualUserId,
     pub order_uuid: OrderUuid,
@@ -93,25 +90,26 @@ pub struct AmendOrderArgs {
     pub post_only: bool,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CancelOrderByArgs {
     pub user_id: VirtualUserId,
     pub cancel_order_by: CancelOrderBy,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DescribeOrderArgs {
     pub user_id: VirtualUserId,
     pub order_uuid: OrderUuid,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum MsgIn {
     PlaceOrder(PlaceOrderArgs),
     CancelOrderBy(CancelOrderByArgs),
     AmendOrder(AmendOrderArgs),
     DescribeOrder(DescribeOrderArgs),
     SetStatus(ProcStatus),
+    Shutdown,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -129,6 +127,7 @@ pub enum MsgOut {
         descriptor: OrderDescriptor,
     },
     StatusChanged(ProcStatus),
+    ShutdownAcknowledged,
 }
 
 pub type Response = Result<MsgOut, MsgError>;
@@ -177,6 +176,52 @@ pub enum MsgError {
     PostOnlyWouldCross,
     #[error("display quantity must be >= 1/15 of remaining quantity")]
     InvalidDisplayQuantity,
+}
+
+impl PartialEq for MsgError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::UnserializableInput {
+                    base_quote: l_base_quote,
+                    message: l_message,
+                    serde_json_error: _,
+                },
+                Self::UnserializableInput {
+                    base_quote: r_base_quote,
+                    message: r_message,
+                    serde_json_error: _,
+                },
+            ) => {
+                l_base_quote == r_base_quote && l_message == r_message
+                // && l_serde_json_error == r_serde_json_error
+            }
+            (Self::CouldNotPersistToEventSource(l0), Self::CouldNotPersistToEventSource(r0)) => l0
+                .as_database_error()
+                .zip(r0.as_database_error())
+                .and_then(|(l, r)| l.code().zip(r.code()))
+                .map(|(l, r)| l == r)
+                .unwrap_or(false),
+            (
+                Self::UserAccountNotFound {
+                    user_id: l_user_id,
+                    asset_code: l_asset_code,
+                },
+                Self::UserAccountNotFound {
+                    user_id: r_user_id,
+                    asset_code: r_asset_code,
+                },
+            ) => l_user_id == r_user_id && l_asset_code == r_asset_code,
+            (Self::BalanceDatabase(l0), Self::BalanceDatabase(r0)) => l0
+                .as_database_error()
+                .zip(r0.as_database_error())
+                .and_then(|(l, r)| l.code().zip(r.code()))
+                .map(|(l, r)| l == r)
+                .unwrap_or(false),
+            (Self::TifViolation(l0), Self::TifViolation(r0)) => l0 == r0,
+            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -239,7 +284,7 @@ impl Deref for Balances {
 }
 
 impl Balances {
-    fn settle_transfer(
+    fn atomic_four_way_double_entry_transfer(
         &mut self,
         debit_base_user: VirtualUserId,
         base_amount: Money38_18,
@@ -358,7 +403,7 @@ struct Proc {
     start_time: (Instant, SystemTime),
 }
 
-type SwitchMsgInOutput = (Result<MsgOut, MsgError>, Vec<BroadcastEvent>);
+type SwitchMsgInOutput = Result<MsgOut, MsgError>;
 
 impl Proc {
     fn handle_expiry(&mut self) {
@@ -480,22 +525,32 @@ impl Proc {
         }
     }
 
-    fn switch_msg_in(&mut self, msg_in: MsgIn) -> SwitchMsgInOutput {
+    fn switch_msg_in(&mut self, msg_in: MsgIn) -> (SwitchMsgInOutput, Vec<BroadcastEvent>) {
         use MsgIn as M;
         use ProcStatus as S;
 
-        match (msg_in, &mut self.status) {
+        let mut events = vec![];
+
+        let switch_msg_in_output = match (msg_in, &mut self.status) {
             (M::SetStatus(status), place) => {
                 *place = status.clone();
-                (Ok(MsgOut::StatusChanged(status)), vec![])
+                Ok(MsgOut::StatusChanged(status))
             }
-            (M::DescribeOrder(args), _) => self.describe_order(args),
-            (_, S::Maintenance) => (Err(MsgError::ProcessorIsSuspended), vec![]),
-            (M::PlaceOrder(args), S::Online | S::PostOnly) => self.place_order(args),
-            (M::CancelOrderBy(args), S::Online | S::CancelOnly) => self.cancel_order_by(args),
-            (M::AmendOrder(args), S::Online) => self.amend_order(args),
+            (M::Shutdown, _) => {
+                self.will_shutdown = true;
+                Ok(MsgOut::ShutdownAcknowledged)
+            }
+            (M::DescribeOrder(args), _) => self.describe_order(args, &mut events),
+            (_, S::Maintenance) => Err(MsgError::ProcessorIsSuspended),
+            (M::PlaceOrder(args), S::Online | S::PostOnly) => self.place_order(args, &mut events),
+            (M::CancelOrderBy(args), S::Online | S::CancelOnly) => {
+                self.cancel_order_by(args, &mut events)
+            }
+            (M::AmendOrder(args), S::Online) => self.amend_order(args, &mut events),
             _ => unreachable!(),
-        }
+        };
+
+        (switch_msg_in_output, events)
     }
 
     fn describe_order(
@@ -504,6 +559,7 @@ impl Proc {
             user_id,
             order_uuid,
         }: DescribeOrderArgs,
+        events: &mut Vec<BroadcastEvent>,
     ) -> SwitchMsgInOutput {
         let descriptor = if let Some(entry_idx) = self
             .trigger_orders
@@ -542,7 +598,7 @@ impl Proc {
                 .ok_or(MsgError::OrderNotFound)
             {
                 Ok(v) => v,
-                Err(e) => return (Err(e), vec![]),
+                Err(e) => return Err(e),
             };
 
             let order_index = open_order.order_index;
@@ -552,7 +608,7 @@ impl Proc {
                 .ok_or(MsgError::OrderNotFound)
             {
                 Ok(v) => v,
-                Err(e) => return (Err(e), vec![]),
+                Err(e) => return Err(e),
             };
 
             let order_type = if order_data.display_quantity.is_some() {
@@ -573,13 +629,16 @@ impl Proc {
             }
         };
 
-        (Ok(MsgOut::OrderSnapshot { descriptor }), vec![])
+        Ok(MsgOut::OrderSnapshot { descriptor })
     }
 
-    fn amend_order(&mut self, args: AmendOrderArgs) -> SwitchMsgInOutput {
+    fn amend_order(
+        &mut self,
+        args: AmendOrderArgs,
+        events: &mut Vec<BroadcastEvent>,
+    ) -> SwitchMsgInOutput {
         let user_id = &args.user_id;
         let order_uuid = args.order_uuid;
-        let mut events = vec![];
 
         let (base, quote) = self
             .asset_pair_row
@@ -601,7 +660,7 @@ impl Proc {
             // Validate new_order_qty if provided
             if let Some(new_qty) = args.new_order_qty {
                 if new_qty <= Decimal::ZERO {
-                    return (Err(MsgError::ZeroQuantity), events);
+                    return Err(MsgError::ZeroQuantity);
                 }
                 // Trigger orders have no fills yet, but we still validate against zero
             }
@@ -645,23 +704,16 @@ impl Proc {
                 ) {
                     Ok(event) => events.push(event),
                     Err(err) => {
-                        return (
-                            Err(match err {
-                                ReserveByAssetError::InsufficientFunds => {
-                                    MsgError::InsufficientFunds
-                                }
-                                ReserveByAssetError::AccountNotFound => {
-                                    MsgError::UserAccountNotFound {
-                                        user_id: *user_id,
-                                        asset_code: currency.clone(),
-                                    }
-                                }
-                                ReserveByAssetError::Database(error) => {
-                                    MsgError::BalanceDatabase(error)
-                                }
-                            }),
-                            events,
-                        );
+                        return Err(match err {
+                            ReserveByAssetError::InsufficientFunds => MsgError::InsufficientFunds,
+                            ReserveByAssetError::AccountNotFound => MsgError::UserAccountNotFound {
+                                user_id: *user_id,
+                                asset_code: currency.clone(),
+                            },
+                            ReserveByAssetError::Database(error) => {
+                                MsgError::BalanceDatabase(error)
+                            }
+                        });
                     }
                 }
             }
@@ -678,13 +730,13 @@ impl Proc {
                 entry.limit_price = Some(new_limit);
             }
 
-            return (Ok(MsgOut::OrderAmended { order_uuid }), events);
+            return Ok(MsgOut::OrderAmended { order_uuid });
         }
 
         let (order_index, base_quote) = {
             let profile = match self.profiles.get(user_id).ok_or(MsgError::OrderNotFound) {
                 Ok(profile) => profile,
-                Err(err) => return (Err(err), vec![]),
+                Err(err) => return Err(err),
             };
             let open = match profile
                 .open_orders
@@ -693,7 +745,7 @@ impl Proc {
                 .ok_or(MsgError::OrderNotFound)
             {
                 Ok(open) => open,
-                Err(err) => return (Err(err), vec![]),
+                Err(err) => return Err(err),
             };
             (open.order_index, open.base_quote.clone())
         };
@@ -704,7 +756,7 @@ impl Proc {
             .ok_or(MsgError::OrderNotFound)
         {
             Ok(data) => data,
-            Err(err) => return (Err(err), vec![]),
+            Err(err) => return Err(err),
         };
 
         let current_price_nz = order_data.price;
@@ -719,12 +771,12 @@ impl Proc {
         let price_changed = new_price_nz != current_price_nz;
 
         let original_total_qty = filled_qty + current_remaining_dec;
-        let mut new_total_qty = args.new_order_qty.unwrap_or(original_total_qty);
+        let new_total_qty = args.new_order_qty.unwrap_or(original_total_qty);
         if new_total_qty <= Decimal::ZERO {
-            return (Err(MsgError::ZeroQuantity), vec![]);
+            return Err(MsgError::ZeroQuantity);
         }
 
-        let mut new_remaining_dec = if new_total_qty <= filled_qty {
+        let new_remaining_dec = if new_total_qty <= filled_qty {
             Decimal::ZERO
         } else {
             new_total_qty - filled_qty
@@ -737,10 +789,10 @@ impl Proc {
 
         if let Some(display) = target_display_dec {
             if display <= Decimal::ZERO {
-                return (Err(MsgError::InvalidDisplayQuantity), vec![]);
+                return Err(MsgError::InvalidDisplayQuantity);
             }
             if new_remaining_dec != Decimal::ZERO && display > new_remaining_dec {
-                return (Err(MsgError::InvalidDisplayQuantity), vec![]);
+                return Err(MsgError::InvalidDisplayQuantity);
             }
         } else if let Some(display) = current_display_dec {
             if new_remaining_dec != Decimal::ZERO && display > new_remaining_dec {
@@ -773,20 +825,17 @@ impl Proc {
             ) {
                 Ok(event) => events.push(event),
                 Err(err) => {
-                    return (
-                        Err(match err {
-                            ReserveByAssetError::InsufficientFunds => MsgError::InsufficientFunds,
-                            ReserveByAssetError::AccountNotFound => MsgError::UserAccountNotFound {
-                                user_id: *user_id,
-                                asset_code: match balance_key {
-                                    BalanceKey::Base(_) => base_quote.0.clone(),
-                                    BalanceKey::Quote(_) => base_quote.1.clone(),
-                                },
+                    return Err(match err {
+                        ReserveByAssetError::InsufficientFunds => MsgError::InsufficientFunds,
+                        ReserveByAssetError::AccountNotFound => MsgError::UserAccountNotFound {
+                            user_id: *user_id,
+                            asset_code: match balance_key {
+                                BalanceKey::Base(_) => base_quote.0.clone(),
+                                BalanceKey::Quote(_) => base_quote.1.clone(),
                             },
-                            ReserveByAssetError::Database(error) => MsgError::BalanceDatabase(error),
-                        }),
-                        events,
-                    );
+                        },
+                        ReserveByAssetError::Database(error) => MsgError::BalanceDatabase(error),
+                    });
                 }
             }
         }
@@ -803,7 +852,7 @@ impl Proc {
 
             self.expiry_queue.retain(|(_, uuid, _)| *uuid != order_uuid);
 
-            return (Ok(MsgOut::OrderAmended { order_uuid }), events);
+            return Ok(MsgOut::OrderAmended { order_uuid });
         }
 
         let new_remaining_nz = NonZeroDecimal::new(new_remaining_dec)
@@ -878,11 +927,14 @@ impl Proc {
             }
         }
 
-        (Ok(MsgOut::OrderAmended { order_uuid }), events)
+        Ok(MsgOut::OrderAmended { order_uuid })
     }
 
-    fn place_order(&mut self, mut args: PlaceOrderArgs) -> SwitchMsgInOutput {
-        let mut events = vec![];
+    fn place_order(
+        &mut self,
+        mut args: PlaceOrderArgs,
+        events: &mut Vec<BroadcastEvent>,
+    ) -> SwitchMsgInOutput {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -902,15 +954,15 @@ impl Proc {
                 args.order_details.order_type,
             ) {
                 Ok(v) => v,
-                Err(_) => return (Err(MsgError::InvalidPrice), vec![]),
+                Err(_) => return Err(MsgError::InvalidPrice),
             }
         } else {
             if args.order_details.price.is_relative() {
-                return (Err(MsgError::NoReferencePrice), vec![]);
+                return Err(MsgError::NoReferencePrice);
             } else {
                 match NonZeroDecimal::new(args.order_details.price.amount) {
                     Ok(v) => v,
-                    Err(()) => return (Err(MsgError::InvalidPrice), vec![]),
+                    Err(()) => return Err(MsgError::InvalidPrice),
                 }
             }
         };
@@ -955,24 +1007,21 @@ impl Proc {
             ) {
                 Ok(event) => events.push(event),
                 Err(err) => {
-                    return (
-                        Err(match err {
-                            ReserveByAssetError::InsufficientFunds => MsgError::InsufficientFunds,
-                            ReserveByAssetError::AccountNotFound => MsgError::UserAccountNotFound {
-                                user_id: args.user_id,
-                                asset_code: currency.clone(),
-                            },
-                            ReserveByAssetError::Database(error) => MsgError::BalanceDatabase(error),
-                        }),
-                        vec![],
-                    );
+                    return Err(match err {
+                        ReserveByAssetError::InsufficientFunds => MsgError::InsufficientFunds,
+                        ReserveByAssetError::AccountNotFound => MsgError::UserAccountNotFound {
+                            user_id: args.user_id,
+                            asset_code: currency.clone(),
+                        },
+                        ReserveByAssetError::Database(error) => MsgError::BalanceDatabase(error),
+                    });
                 }
             }
 
             let limit_price = if args.order_details.order_type == OrderType::StopLossLimit {
                 let secondary_price = match args.order_details.secondary_price {
                     Some(v) => v,
-                    None => return (Err(MsgError::InvalidPrice), vec![]),
+                    None => return Err(MsgError::InvalidPrice),
                 };
 
                 let limit_decimal = if let Some(last_traded_price) = self.last_traded_price {
@@ -982,15 +1031,15 @@ impl Proc {
                         args.order_details.order_type,
                     ) {
                         Ok(v) => v,
-                        Err(_) => return (Err(MsgError::InvalidPrice), vec![]),
+                        Err(_) => return Err(MsgError::InvalidPrice),
                     }
                 } else {
                     if secondary_price.is_relative() {
-                        return (Err(MsgError::NoReferencePrice), vec![]);
+                        return Err(MsgError::NoReferencePrice);
                     } else {
                         match NonZeroDecimal::new(secondary_price.amount) {
                             Ok(v) => v,
-                            Err(()) => return (Err(MsgError::InvalidPrice), vec![]),
+                            Err(()) => return Err(MsgError::InvalidPrice),
                         }
                     }
                 };
@@ -1017,7 +1066,7 @@ impl Proc {
                     .insert(insert_pos, (expiry_ts, args.order_uuid, None));
             }
 
-            return (Ok(MsgOut::OrderPlaced), vec![]);
+            return Ok(MsgOut::OrderPlaced);
         }
 
         if args.order_details.order_type == OrderType::TakeProfit
@@ -1060,24 +1109,21 @@ impl Proc {
             ) {
                 Ok(event) => events.push(event),
                 Err(err) => {
-                    return (
-                        Err(match err {
-                            ReserveByAssetError::InsufficientFunds => MsgError::InsufficientFunds,
-                            ReserveByAssetError::AccountNotFound => MsgError::UserAccountNotFound {
-                                user_id: args.user_id,
-                                asset_code: currency.clone(),
-                            },
-                            ReserveByAssetError::Database(error) => MsgError::BalanceDatabase(error),
-                        }),
-                        vec![],
-                    );
+                    return Err(match err {
+                        ReserveByAssetError::InsufficientFunds => MsgError::InsufficientFunds,
+                        ReserveByAssetError::AccountNotFound => MsgError::UserAccountNotFound {
+                            user_id: args.user_id,
+                            asset_code: currency.clone(),
+                        },
+                        ReserveByAssetError::Database(error) => MsgError::BalanceDatabase(error),
+                    });
                 }
             }
 
             let limit_price = if args.order_details.order_type == OrderType::TakeProfitLimit {
                 let secondary_price = match args.order_details.secondary_price {
                     Some(v) => v,
-                    None => return (Err(MsgError::InvalidPrice), vec![]),
+                    None => return Err(MsgError::InvalidPrice),
                 };
 
                 let limit_decimal = if let Some(last_traded_price) = self.last_traded_price {
@@ -1087,15 +1133,15 @@ impl Proc {
                         args.order_details.order_type,
                     ) {
                         Ok(v) => v,
-                        Err(_) => return (Err(MsgError::InvalidPrice), vec![]),
+                        Err(_) => return Err(MsgError::InvalidPrice),
                     }
                 } else {
                     if secondary_price.is_relative() {
-                        return (Err(MsgError::NoReferencePrice), vec![]);
+                        return Err(MsgError::NoReferencePrice);
                     } else {
                         match NonZeroDecimal::new(secondary_price.amount) {
                             Ok(v) => v,
-                            Err(()) => return (Err(MsgError::InvalidPrice), vec![]),
+                            Err(()) => return Err(MsgError::InvalidPrice),
                         }
                     }
                 };
@@ -1122,7 +1168,7 @@ impl Proc {
                     .insert(insert_pos, (expiry_ts, args.order_uuid, None));
             }
 
-            return (Ok(MsgOut::OrderPlaced), events);
+            return Ok(MsgOut::OrderPlaced);
         }
 
         let pending_fill = match matching_engine::try_fill_order::try_fill_orders(
@@ -1132,7 +1178,7 @@ impl Proc {
             Some(&args.user_id),
         ) {
             Ok(v) => v,
-            Err(TryFillOrdersError::ZeroQuantity) => return (Err(MsgError::ZeroQuantity), vec![]),
+            Err(TryFillOrdersError::ZeroQuantity) => return Err(MsgError::ZeroQuantity),
         };
 
         if let Err(tif_violation) = pending_fill.has_tif_violation(
@@ -1143,13 +1189,13 @@ impl Proc {
             // if let Err(error) = transaction.rollback().await {
             //     tracing::error!(?error, "database transaction rollback error");
             // }
-            return (Err(MsgError::TifViolation(tif_violation)), vec![]);
+            return Err(MsgError::TifViolation(tif_violation));
         }
 
         if let Some(FillType::Cancelled) = pending_fill.taker_fill_outcome
             && args.order_details.validate_only
         {
-            return (Err(MsgError::OrderCancelled), vec![]);
+            return Err(MsgError::OrderCancelled);
         }
 
         let quantity_money = Money38_18(args.order_details.quantity.unwrap().deref().clone());
@@ -1201,7 +1247,7 @@ impl Proc {
         };
 
         if args.order_details.validate_only {
-            return (Ok(MsgOut::OrderValidated), vec![]);
+            return Ok(MsgOut::OrderValidated);
         }
 
         let (base, quote) = args.base_quote.clone();
@@ -1225,17 +1271,14 @@ impl Proc {
         ) {
             Ok(event) => events.push(event),
             Err(err) => {
-                return (
-                    Err(match err {
-                        ReserveByAssetError::InsufficientFunds => MsgError::InsufficientFunds,
-                        ReserveByAssetError::AccountNotFound => MsgError::UserAccountNotFound {
-                            user_id: args.user_id,
-                            asset_code: currency.clone(),
-                        },
-                        ReserveByAssetError::Database(error) => MsgError::BalanceDatabase(error),
-                    }),
-                    vec![],
-                );
+                return Err(match err {
+                    ReserveByAssetError::InsufficientFunds => MsgError::InsufficientFunds,
+                    ReserveByAssetError::AccountNotFound => MsgError::UserAccountNotFound {
+                        user_id: args.user_id,
+                        asset_code: currency.clone(),
+                    },
+                    ReserveByAssetError::Database(error) => MsgError::BalanceDatabase(error),
+                });
             }
         }
 
@@ -1265,7 +1308,7 @@ impl Proc {
                 OrderSide::Sell => (&args.user_id, &maker_order_data.user_id),
             };
 
-            match self.balances.settle_transfer(
+            match self.balances.atomic_four_way_double_entry_transfer(
                 *seller_user_id,
                 Money38_18(fill_amount.deref().clone()),
                 *buyer_user_id,
@@ -1276,27 +1319,33 @@ impl Proc {
             ) {
                 Ok(event) => events.push(event),
                 Err(err) => {
-                    return (
-                        Err(match err {
-                            SettleTransferError::InsufficientFunds { user_id, asset_code } => {
-                                tracing::error!(
-                                    ?user_id,
-                                    ?asset_code,
-                                    "settlement failed: insufficient funds during trade execution"
-                                );
-                                MsgError::InsufficientFunds
+                    return Err(match err {
+                        SettleTransferError::InsufficientFunds {
+                            user_id,
+                            asset_code,
+                        } => {
+                            tracing::error!(
+                                ?user_id,
+                                ?asset_code,
+                                "settlement failed: insufficient funds during trade execution"
+                            );
+                            MsgError::InsufficientFunds
+                        }
+                        SettleTransferError::AccountNotFound {
+                            user_id,
+                            asset_code,
+                        } => {
+                            tracing::error!(
+                                ?user_id,
+                                ?asset_code,
+                                "settlement failed: account not found during trade execution"
+                            );
+                            MsgError::UserAccountNotFound {
+                                user_id,
+                                asset_code,
                             }
-                            SettleTransferError::AccountNotFound { user_id, asset_code } => {
-                                tracing::error!(
-                                    ?user_id,
-                                    ?asset_code,
-                                    "settlement failed: account not found during trade execution"
-                                );
-                                MsgError::UserAccountNotFound { user_id, asset_code }
-                            }
-                        }),
-                        vec![],
-                    );
+                        }
+                    });
                 }
             }
         }
@@ -1434,7 +1483,7 @@ impl Proc {
             }
         };
 
-        (Ok(MsgOut::OrderPlaced), events)
+        Ok(MsgOut::OrderPlaced)
     }
 
     fn cancel_order_by(
@@ -1443,12 +1492,12 @@ impl Proc {
             user_id,
             cancel_order_by,
         }: CancelOrderByArgs,
+        events: &mut Vec<BroadcastEvent>,
     ) -> SwitchMsgInOutput {
         let (base, quote) = self
             .asset_pair_row
             .base_quote(&self.symbol_vocabulary)
             .expect("symbols are always resolvable");
-        let mut events = vec![];
 
         let mut trigger_to_cancel = vec![];
         for (idx, entry) in self.trigger_orders.iter().enumerate() {
@@ -1514,17 +1563,14 @@ impl Proc {
             ) {
                 Ok(event) => events.push(event),
                 Err(err) => {
-                    return (
-                        Err(match err {
-                            ReserveByAssetError::InsufficientFunds => MsgError::InsufficientFunds,
-                            ReserveByAssetError::AccountNotFound => MsgError::UserAccountNotFound {
-                                user_id,
-                                asset_code: currency.clone(),
-                            },
-                            ReserveByAssetError::Database(error) => MsgError::BalanceDatabase(error),
-                        }),
-                        events,
-                    );
+                    return Err(match err {
+                        ReserveByAssetError::InsufficientFunds => MsgError::InsufficientFunds,
+                        ReserveByAssetError::AccountNotFound => MsgError::UserAccountNotFound {
+                            user_id,
+                            asset_code: currency.clone(),
+                        },
+                        ReserveByAssetError::Database(error) => MsgError::BalanceDatabase(error),
+                    });
                 }
             }
 
@@ -1535,23 +1581,20 @@ impl Proc {
         }
 
         if !success.is_empty() {
-            return (
-                Ok(MsgOut::OrderCancelled {
-                    success,
-                    failed: vec![],
-                }),
-                events,
-            );
+            return Ok(MsgOut::OrderCancelled {
+                success,
+                failed: vec![],
+            });
         }
 
         let orders_to_cancel: Vec<_> =
             match self.profiles.get(&user_id).ok_or(MsgError::NoOpenPositions) {
                 Ok(profile) => profile.isolate_orders_for_cancel(&cancel_order_by),
-                Err(e) => return (Err(e), vec![]),
+                Err(e) => return Err(e),
             };
 
         if orders_to_cancel.is_empty() {
-            return (Err(MsgError::OrderNotFound), vec![]);
+            return Err(MsgError::OrderNotFound);
         }
 
         let mut success = vec![];
@@ -1604,17 +1647,14 @@ impl Proc {
             ) {
                 Ok(event) => events.push(event),
                 Err(err) => {
-                    return (
-                        Err(match err {
-                            ReserveByAssetError::InsufficientFunds => MsgError::InsufficientFunds,
-                            ReserveByAssetError::AccountNotFound => MsgError::UserAccountNotFound {
-                                user_id,
-                                asset_code: currency.clone(),
-                            },
-                            ReserveByAssetError::Database(error) => MsgError::BalanceDatabase(error),
-                        }),
-                        events,
-                    );
+                    return Err(match err {
+                        ReserveByAssetError::InsufficientFunds => MsgError::InsufficientFunds,
+                        ReserveByAssetError::AccountNotFound => MsgError::UserAccountNotFound {
+                            user_id,
+                            asset_code: currency.clone(),
+                        },
+                        ReserveByAssetError::Database(error) => MsgError::BalanceDatabase(error),
+                    });
                 }
             }
 
@@ -1645,11 +1685,16 @@ impl Proc {
             tracing::trace!(?order, "cancelling order");
         }
 
-        (Ok(MsgOut::OrderCancelled { success, failed }), events)
+        Ok(MsgOut::OrderCancelled { success, failed })
     }
 }
 
 async fn insert_into_t_trading_event_source(proc: &Proc, msg_in: &MsgIn) -> Result<(), MsgError> {
+    // Skip persisting Shutdown messages to event source - they shouldn't be replayed during recovery
+    if matches!(msg_in, MsgIn::Shutdown) {
+        return Ok(());
+    }
+
     let base_quote = proc
         .asset_pair_row
         .base_quote(&proc.symbol_vocabulary)
@@ -1679,22 +1724,21 @@ async fn insert_into_t_trading_event_source(proc: &Proc, msg_in: &MsgIn) -> Resu
 async fn ap_loop_select(mut mpsc_receiver: mpsc::Receiver<Envelope>, mut proc: Proc) {
     enum Event {
         MsgIn(Option<Envelope>),
-        PgEvent(Option<Result<PgNotification, sqlx::Error>>),
+        PgEvent(Result<PgNotification, sqlx::Error>),
         ExpiryReached,
     }
 
-    let (s, mut pg_listener) = mpsc::channel(1);
-    tokio::task::spawn({
-        let pg_pool = proc.pg_pool.clone();
-        async move {
-            let mut pg_listener = PgListener::connect_with(&pg_pool).await.unwrap();
-            pg_listener.listen("account_tx_journal").await.unwrap();
-
-            loop {
-                let _ = s.send(pg_listener.recv().await).await;
-            }
-        }
-    });
+    // let (s, mut pg_listener) = mpsc::channel(1);
+    // tokio::task::spawn({
+    let pg_pool = proc.pg_pool.clone();
+    //     async move {
+    let mut pg_listener = PgListener::connect_with(&pg_pool).await.unwrap();
+    pg_listener.listen("account_tx_journal").await.unwrap();
+    //         loop {
+    //             let _ = s.send(pg_listener.recv().await).await;
+    //         }
+    //     }
+    // });
 
     while !proc.will_shutdown {
         let expiry_sleep = match proc.expiry_queue.first() {
@@ -1719,7 +1763,10 @@ async fn ap_loop_select(mut mpsc_receiver: mpsc::Receiver<Envelope>, mut proc: P
         };
 
         match event {
-            Event::MsgIn(None) => todo!("no more possible senders, webserver is down?"),
+            Event::MsgIn(None) => {
+                // Channel closed - all senders dropped (e.g., tests finished, server shutdown)
+                proc.will_shutdown = true;
+            }
             Event::MsgIn(Some((snd, msg_in))) => {
                 let (response, events) =
                     match insert_into_t_trading_event_source(&proc, &msg_in).await {
@@ -1983,6 +2030,7 @@ pub struct ProcHandle {
     pub base_quote: BaseQuote,
     pub mpsc_sender: mpsc::Sender<Envelope>,
     pub broadcast_sender: broadcast::WeakSender<BroadcastEvent>,
+    pub asset_pair_row: AssetPairRow,
     #[allow(dead_code)]
     join_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -2096,10 +2144,11 @@ pub async fn launch_processors_for_pairs<'a>(
                     mpsc_sender,
                     broadcast_sender: broadcast_sender.downgrade(),
                     join_handle: Some(join_handle),
+                    asset_pair_row
                 }
             }
         })
-        .buffer_unordered(2)
+        .buffer_unordered(1)
         .collect()
         .await;
 

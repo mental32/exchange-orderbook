@@ -158,15 +158,11 @@ pub async fn test_ap_actor_fixture(pg_pool: &sqlx::PgPool) -> TestFixture {
     let asset_pair_row = sqlx::query_as!(
         AssetPairRow,
         r#"
-            SELECT id, base_asset, quote_asset, status,
-                   min_order_size, max_order_size,
-                   price_tick_size, quantity_tick_size,
-                   created_at, updated_at
-            FROM t_trading_asset_pairs
+            SELECT * FROM t_trading_asset_pairs
             WHERE base_asset = $1 AND quote_asset = $2
             "#,
         "BTC",
-        "USD"
+        "ZUSD"
     )
     .fetch_one(pg_pool)
     .await
@@ -191,18 +187,7 @@ pub async fn test_ap_actor_fixture(pg_pool: &sqlx::PgPool) -> TestFixture {
     .unwrap();
 
     let (symbol_vocabulary, ap_info) = launch_processors_for_pairs(
-        vec![AssetPairRow {
-            id: 0,
-            base_asset: "BTC".to_owned(),
-            quote_asset: "USD".to_owned(),
-            status: "active".to_owned(),
-            min_order_size: dec!(0.01),
-            max_order_size: None,
-            price_tick_size: dec!(0.01),
-            quantity_tick_size: dec!(0.01),
-            created_at: PrimitiveDateTime::MIN,
-            updated_at: PrimitiveDateTime::MIN,
-        }],
+        vec![asset_pair_row.clone()],
         pg_pool.clone(),
     )
     .await

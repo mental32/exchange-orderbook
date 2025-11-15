@@ -6,7 +6,6 @@ use ap_actor::proc::ProcStatus;
 use ap_actor::test::TestFixture;
 use ap_actor::test::TestUser;
 use ap_actor::test::test_ap_actor_fixture;
-use matching_engine::decimal::Decimal;
 use matching_engine::decimal::NonZeroDecimal;
 use matching_engine::decimal::dec;
 use matching_engine::order_ticket::OrderTicket;
@@ -18,13 +17,13 @@ use tokio::sync::oneshot;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_ap_actor_lifecycle(pg_pool: sqlx::PgPool) {
+    let user = TestUser::random().create(&pg_pool).await;
+
     let TestFixture {
         ap_sender: actor_tx,
         btc_usd,
         ..
     } = test_ap_actor_fixture(&pg_pool).await;
-
-    let user = TestUser::random().create(&pg_pool).await;
 
     // Transition to maintenance mode and verify acknowledgement
     let resp = {
@@ -67,10 +66,7 @@ async fn test_ap_actor_lifecycle(pg_pool: sqlx::PgPool) {
             .unwrap();
         resp_rx.await.unwrap()
     };
-    assert!(
-        matches!(resp, Err(MsgError::ProcessorIsSuspended)),
-        "PlaceOrder while in Maintenance should report ProcessorIsSuspended"
-    );
+    assert_eq!(resp, Err(MsgError::ProcessorIsSuspended));
 
     // Bring processor back online
     let resp = {
@@ -81,10 +77,7 @@ async fn test_ap_actor_lifecycle(pg_pool: sqlx::PgPool) {
             .unwrap();
         resp_rx.await.unwrap()
     };
-    assert!(
-        matches!(resp, Ok(MsgOut::StatusChanged(ProcStatus::Online))),
-        "Setting status back to Online should yield StatusChanged(Online)"
-    );
+    assert_eq!(resp, Ok(MsgOut::StatusChanged(ProcStatus::Online)));
 
     // Orders should now be accepted again
     let order_after_resume = MsgIn::PlaceOrder(PlaceOrderArgs {

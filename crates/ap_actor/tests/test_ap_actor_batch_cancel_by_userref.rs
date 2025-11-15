@@ -17,11 +17,11 @@ use tokio::sync::oneshot;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_ap_actor_batch_cancel_by_userref(pg_pool: sqlx::PgPool) {
+    let user = TestUser::random().create(&pg_pool).await;
+
     let TestFixture {
         btc_usd, ap_sender, ..
     } = test_ap_actor_fixture(&pg_pool).await;
-
-    let user = TestUser::random().create(&pg_pool).await;
 
     let initial_balance = user.balance(&pg_pool, user.usd_account_id).await;
     assert_eq!(initial_balance, dec!(100_000));
@@ -54,9 +54,8 @@ async fn test_ap_actor_batch_cancel_by_userref(pg_pool: sqlx::PgPool) {
         let (resp_tx, resp_rx) = oneshot::channel();
         ap_sender.send((resp_tx, order1_msg)).await.unwrap();
         resp_rx.await.unwrap()
-    }
-    .unwrap();
-    assert_eq!(resp1, MsgOut::OrderPlaced {});
+    };
+    assert_eq!(resp1, Ok(MsgOut::OrderPlaced));
 
     // Order 2: 0.2 BTC @ $48k = $9,600
     let order2_uuid = OrderUuid(uuid::Uuid::new_v4());
@@ -87,7 +86,7 @@ async fn test_ap_actor_batch_cancel_by_userref(pg_pool: sqlx::PgPool) {
         ap_sender.send((resp_tx, order2_msg)).await.unwrap();
         resp_rx.await.unwrap()
     };
-    assert!(matches!(resp2, Ok(MsgOut::OrderPlaced { .. })));
+    assert_eq!(resp2, Ok(MsgOut::OrderPlaced));
 
     // Order 3: 0.15 BTC @ $49k = $7,350
     let order3_uuid = OrderUuid(uuid::Uuid::new_v4());
@@ -118,7 +117,7 @@ async fn test_ap_actor_batch_cancel_by_userref(pg_pool: sqlx::PgPool) {
         ap_sender.send((resp_tx, order3_msg)).await.unwrap();
         resp_rx.await.unwrap()
     };
-    assert!(matches!(resp3, Ok(MsgOut::OrderPlaced { .. })));
+    assert_eq!(resp3, Ok(MsgOut::OrderPlaced));
 
     let balance_after_orders = user.balance(&pg_pool, user.usd_account_id).await;
     assert_eq!(
@@ -140,33 +139,13 @@ async fn test_ap_actor_batch_cancel_by_userref(pg_pool: sqlx::PgPool) {
     };
 
     // Verify response structure
-    match cancel_resp {
-        Ok(MsgOut::OrderCancelled { success, failed }) => {
-            assert_eq!(
-                success.len(),
-                3,
-                "Should have cancelled 3 orders, got: {}",
-                success.len()
-            );
-
-            // Verify all 3 UUIDs are in the success list
-            assert!(
-                success.contains(&order1_uuid),
-                "order1_uuid should be in success list"
-            );
-            assert!(
-                success.contains(&order2_uuid),
-                "order2_uuid should be in success list"
-            );
-            assert!(
-                success.contains(&order3_uuid),
-                "order3_uuid should be in success list"
-            );
-
-            assert_eq!(failed.len(), 0, "Should have no failed cancellations");
-        }
-        other => panic!("Expected OrderCancelled, got: {:?}", other),
-    }
+    assert_eq!(
+        cancel_resp,
+        Ok(MsgOut::OrderCancelled {
+            success: vec![order1_uuid, order2_uuid, order3_uuid],
+            failed: vec![],
+        })
+    );
 
     // Verify all 3 refunds were created
     let refund_count = sqlx::query_scalar!(

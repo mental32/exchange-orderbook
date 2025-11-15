@@ -1,38 +1,48 @@
-use ap_actor::proc::CancelOrderByArgs;
 use tokio::sync::oneshot;
 
 use ap_actor::order_management::CancelOrderBy;
 use ap_actor::order_management::PlaceOrderArgs;
+use ap_actor::proc::CancelOrderByArgs;
 use ap_actor::proc::MsgIn;
 use ap_actor::proc::MsgOut;
 use ap_actor::test::TestFixture;
 use ap_actor::test::TestUser;
 use ap_actor::test::test_ap_actor_fixture;
+use matching_engine::decimal::NonZeroDecimal;
 use matching_engine::decimal::dec;
+use matching_engine::order_ticket::OrderTicket;
 use matching_engine::order_uuid::OrderUuid;
+use matching_engine::orderbook::OrderSide;
+use matching_engine::orderbook::OrderType;
+use matching_engine::price::Price;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_stop_loss_cancelled_before_trigger(pg_pool: sqlx::PgPool) {
+    let user = TestUser::random().create(&pg_pool).await;
+
     let TestFixture {
         btc_usd, ap_sender, ..
     } = test_ap_actor_fixture(&pg_pool).await;
-
-    let user = TestUser::random().create(&pg_pool).await;
 
     let initial_btc = user.balance(&pg_pool, user.btc_account_id).await;
 
     assert_eq!(initial_btc, dec!(10), "Initial BTC should be 10");
 
     // Place StopLoss sell without triggering
-    let stop_loss_json = serde_json::json!({
-        "nonce": 300001,
-        "type": "sell",
-        "ordertype": "stop-loss",
-        "volume": "0.5",
-        "pair": "BTC/USD",
-        "price": "48000",
-        "trigger": "Last"
-    });
+    let stop_loss_order_details = OrderTicket::builder(
+        OrderType::StopLoss,
+        OrderSide::Sell,
+        Price {
+            prefix: None,
+            amount: dec!(48000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
+    .volume(dec!(0.5))
+    .build()
+    .unwrap();
 
     let stop_loss_uuid = OrderUuid(uuid::Uuid::new_v4());
     let resp = {
@@ -44,14 +54,14 @@ async fn test_stop_loss_cancelled_before_trigger(pg_pool: sqlx::PgPool) {
                     base_quote: btc_usd.clone(),
                     user_id: user.user_id.clone(),
                     order_uuid: stop_loss_uuid.clone(),
-                    order_details: serde_json::from_value(stop_loss_json).unwrap(),
+                    order_details: stop_loss_order_details,
                 }),
             ))
             .await
             .unwrap();
-        resp_rx.await.unwrap()
+        resp_rx.await.unwrap().unwrap()
     };
-    assert!(matches!(resp, Ok(MsgOut::OrderPlaced)));
+    assert_eq!(resp, MsgOut::OrderPlaced);
 
     // Verify BTC reserved
     let btc_after_place = user.balance(&pg_pool, user.btc_account_id).await;
@@ -72,12 +82,14 @@ async fn test_stop_loss_cancelled_before_trigger(pg_pool: sqlx::PgPool) {
     let resp = {
         let (resp_tx, resp_rx) = oneshot::channel();
         ap_sender.send((resp_tx, cancel_msg)).await.unwrap();
-        resp_rx.await.unwrap()
+        resp_rx.await.unwrap().unwrap()
     };
-    assert!(
-        matches!(resp, Ok(MsgOut::OrderCancelled { .. })),
-        "Should successfully cancel stop-loss order, got: {:?}",
-        resp
+    assert_eq!(
+        resp,
+        MsgOut::OrderCancelled {
+            success: vec![stop_loss_uuid],
+            failed: vec![]
+        }
     );
 
     // Verify refund transaction exists
