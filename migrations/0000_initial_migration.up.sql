@@ -282,6 +282,18 @@ CREATE TRIGGER tr_reject_delete
     FOR EACH ROW
     EXECUTE FUNCTION f_reject('table is append-only');
 
+-- Asset table
+CREATE TABLE t_assets(
+    id text NOT NULL CHECK (f_valid_currency_code(id)),
+    asset_class text NOT NULL CHECK (asset_class IN ('currency', 'tokenized_asset')),
+    alternate_name text NOT NULL CHECK (alternate_name <> id),
+    decimals integer NOT NULL CHECK (decimals >= 0 AND decimals <= 18),
+    display_decimals integer NOT NULL CHECK (display_decimals >= 0 AND display_decimals <= decimals),
+    status text NOT NULL DEFAULT 'active' CHECK (status IN ('enabled', 'deposit_only', 'withdraw_only', 'withdraw_only', 'funding_temporarily_disabled')),
+    collateral_value numeric(38,18),
+    PRIMARY KEY (id)
+);
+
 -- Trading pairs configuration table
 CREATE TABLE t_trading_asset_pairs( -- Configuration for tradeable asset pairs in the matching engine using DECIMAL types for precise financial calculations
     id serial PRIMARY KEY,
@@ -292,6 +304,26 @@ CREATE TABLE t_trading_asset_pairs( -- Configuration for tradeable asset pairs i
     max_order_size money38_18 NOT NULL CHECK (max_order_size > 0 AND max_order_size >= min_order_size), -- Maximum order size in base asset units (e.g., 100 BTC)
     price_tick_size money38_18 NOT NULL CHECK (price_tick_size > 0), -- Minimum price increment for orders in quote asset units (e.g., 0.01 USD)
     quantity_tick_size money38_18 NOT NULL CHECK (quantity_tick_size > 0 AND quantity_tick_size <= min_order_size), -- Minimum quantity increment for orders in base asset units (e.g., 0.0001 BTC)
+    altname text NOT NULL, -- Kraken-compatible pair identifier (e.g., BTCUSD, ETHUSD)
+    wsname text NOT NULL, -- WebSocket pair name (e.g., BTC/USD, ETH/USD)
+    pair_decimals integer NOT NULL, -- Number of decimal places for prices in this pair
+    cost_decimals integer NOT NULL, -- Number of decimal places for cost of trades in pair (quote asset terms)
+    lot_decimals integer NOT NULL, -- Number of decimal places for volume (base asset terms)
+    lot text NOT NULL DEFAULT 'unit', -- Volume lot size designation
+    lot_multiplier integer NOT NULL DEFAULT 1, -- Amount to multiply lot volume by to get currency volume
+    aclass_base text NOT NULL DEFAULT 'currency', -- Asset class of base component
+    aclass_quote text NOT NULL DEFAULT 'currency', -- Asset class of quote component
+    leverage_buy integer[] NOT NULL DEFAULT '{}', -- Array of leverage amounts available when buying
+    leverage_sell integer[] NOT NULL DEFAULT '{}', -- Array of leverage amounts available when selling
+    fees jsonb NOT NULL DEFAULT '[[0,0.4],[10000,0.35],[50000,0.24],[100000,0.22],[250000,0.2],[500000,0.18],[1000000,0.16],[2500000,0.14],[5000000,0.12],[10000000,0.1]]'::jsonb, -- Fee schedule array in [volume, percent] tuples
+    fees_maker jsonb NOT NULL DEFAULT '[[0,0.25],[10000,0.2],[50000,0.14],[100000,0.12],[250000,0.1],[500000,0.08],[1000000,0.06],[2500000,0.04],[5000000,0.02],[10000000,0.0]]'::jsonb, -- Maker fee schedule array in [volume, percent] tuples
+    fee_volume_currency text NOT NULL DEFAULT 'ZUSD', -- Volume discount currency
+    margin_call integer NOT NULL DEFAULT 80, -- Margin call level
+    margin_stop integer NOT NULL DEFAULT 40, -- Stop-out/liquidation margin level
+    costmin money38_18 NOT NULL, -- Minimum order cost (in terms of quote currency)
+    tick_size money38_18 NOT NULL, -- Minimum increment between valid price levels
+    long_position_limit integer, -- Maximum long margin position size (in terms of base currency)
+    short_position_limit integer, -- Maximum short margin position size (in terms of base currency)
     created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (base_asset, quote_asset),

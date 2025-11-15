@@ -8,6 +8,7 @@ DROP TABLE IF EXISTS t_account_tx_journal;
 DROP TABLE IF EXISTS t_money_accounts;
 DROP TABLE IF EXISTS t_user_addresses;
 DROP TABLE IF EXISTS t_user_data;
+DROP TABLE IF EXISTS t_assets;
 
 DROP TRIGGER IF EXISTS tr_journal_outbox ON t_account_tx_journal;
 DROP TRIGGER IF EXISTS f_validate_transaction ON account_tx_journal;
