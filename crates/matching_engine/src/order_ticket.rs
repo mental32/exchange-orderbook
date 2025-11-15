@@ -9,7 +9,7 @@ use crate::orderflags::OrderFlags;
 use crate::price::Price;
 use crate::time::Time;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OrderTicket {
     pub order_type: OrderType,
     pub side: OrderSide,
