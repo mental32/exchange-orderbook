@@ -28,10 +28,10 @@ fn main() -> anyhow::Result<()> {
                     .await
                     .context("could not connect to postgres")?;
 
-                let _bitcoind_rpc_client =
-                    bitcoind_grpc::connect_bitcoin_rpc(configuration.bitcoin_grpc_endpoint.clone())
-                        .await
-                        .context("connecting to bitcoind rpc service")?;
+                // let _bitcoind_rpc_client =
+                //     bitcoind_grpc::connect_bitcoin_rpc(configuration.bitcoin_grpc_endpoint.clone())
+                //         .await
+                //         .context("connecting to bitcoind rpc service")?;
 
                 let stop_signal = async {
                     let _ = tokio::signal::ctrl_c().await;

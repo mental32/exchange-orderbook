@@ -4,7 +4,7 @@ use crate::middleware::clerk::validate_clerk_session;
 use crate::secret_str::SecretStr;
 use ap_actor::order_management::OrderManagement;
 use axum::Router;
-use axum::routing::post;
+use axum::routing::{get, post};
 use std::time::Duration;
 
 mod __dummy {
@@ -55,37 +55,42 @@ pub mod trades_history;
 
 pub fn routes_market_data(state: AppState) -> Router {
     Router::new()
-        .route("Time", post(time::f))
-        .route("SystemStatus", post(system_status::f))
-        .route("Assets", post(assets::f).with_state(state.clone()))
-        .route("AssetPairs", post(asset_pairs::f).with_state(state.clone()))
-        .route("Ticker", post(ticker::f).with_state(state.clone()))
-        .route("OHLC", post(ohlc::f).with_state(state.clone()))
-        .route("Depth", post(depth::f).with_state(state.clone()))
-        .route("Trades", post(trades::f).with_state(state.clone()))
-        .route("Spread", post(spread::f).with_state(state))
+        .route("/Time", post(time::f))
+        .route("/SystemStatus", post(system_status::f))
+        .route("/Assets", post(assets::f).with_state(state.clone()))
+        .route(
+            "/AssetPairs",
+            get(asset_pairs::f)
+                .post(asset_pairs::f)
+                .with_state(state.clone()),
+        )
+        .route("/Ticker", post(ticker::f).with_state(state.clone()))
+        .route("/OHLC", post(ohlc::f).with_state(state.clone()))
+        .route("/Depth", post(depth::f).with_state(state.clone()))
+        .route("/Trades", post(trades::f).with_state(state.clone()))
+        .route("/Spread", post(spread::f).with_state(state))
 }
 
 fn routes_account_data() -> Router {
     Router::new()
-        .route("BalanceEx", post(balance_ex::f))
-        .route("Balance", post(balance::f))
-        .route("CreditLines", post(credit_lines::f))
-        .route("TradeBalance", post(trade_balance::f))
-        .route("OpenOrders", post(open_orders::f))
-        .route("ClosedOrders", post(closed_orders::f))
-        .route("QueryOrders", post(query_orders::f))
-        .route("OrderAmends", post(order_amends::f))
-        .route("TradesHistory", post(trades_history::f))
-        .route("QueryTrades", post(query_trades::f))
-        .route("OpenPositions", post(open_positions::f))
-        .route("Ledgers", post(ledgers::f))
-        .route("QueryLedgers", post(query_ledgers::f))
-        .route("TradeVolume", post(trade_volume::f))
-        .route("AddExport", post(add_export::f))
-        .route("ExportStatus", post(export_status::f))
-        .route("RetrieveExport", post(retrieve_export::f))
-        .route("RemoveExport", post(remove_export::f))
+        .route("/BalanceEx", post(balance_ex::f))
+        .route("/Balance", post(balance::f))
+        .route("/CreditLines", post(credit_lines::f))
+        .route("/TradeBalance", post(trade_balance::f))
+        .route("/OpenOrders", post(open_orders::f))
+        .route("/ClosedOrders", post(closed_orders::f))
+        .route("/QueryOrders", post(query_orders::f))
+        .route("/OrderAmends", post(order_amends::f))
+        .route("/TradesHistory", post(trades_history::f))
+        .route("/QueryTrades", post(query_trades::f))
+        .route("/OpenPositions", post(open_positions::f))
+        .route("/Ledgers", post(ledgers::f))
+        .route("/QueryLedgers", post(query_ledgers::f))
+        .route("/TradeVolume", post(trade_volume::f))
+        .route("/AddExport", post(add_export::f))
+        .route("/ExportStatus", post(export_status::f))
+        .route("/RetrieveExport", post(retrieve_export::f))
+        .route("/RemoveExport", post(remove_export::f))
 }
 
 fn routes_trading(state: AppState) -> Router {
@@ -111,15 +116,15 @@ fn routes_trading(state: AppState) -> Router {
     );
 
     Router::new()
-        .route("AddOrder", post(add_order::f))
-        .route("AmendOrder", post(amend_order::f))
-        .route("CancelOrder", post(cancel_order::f))
-        .route("CancelAll", post(cancel_all::f))
-        .route("CancelAllOrdersAfter", post(cancel_all_after::f))
-        .route("GetWebSocketsToken", post(get_websockets_token::f))
-        .route("AddOrderBatch", post(add_order_batch::f))
-        .route("CancelOrderBatch", post(cancel_order_batch::f))
-        .route("EditOrder", post(edit_order::f))
+        .route("/AddOrder", post(add_order::f))
+        .route("/AmendOrder", post(amend_order::f))
+        .route("/CancelOrder", post(cancel_order::f))
+        .route("/CancelAll", post(cancel_all::f))
+        .route("/CancelAllOrdersAfter", post(cancel_all_after::f))
+        .route("/GetWebSocketsToken", post(get_websockets_token::f))
+        .route("/AddOrderBatch", post(add_order_batch::f))
+        .route("/CancelOrderBatch", post(cancel_order_batch::f))
+        .route("/EditOrder", post(edit_order::f))
         .with_state(state)
         .layer(axum::middleware::from_fn_with_state(
             clerk_state.clone(),

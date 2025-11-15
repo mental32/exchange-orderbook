@@ -68,18 +68,7 @@ pub async fn f(
         }
     }
 
-    let user_id = users
-        .to_virtual_user_id(clerk.user_id(), || async move {
-            sqlx::query!(
-                "SELECT id FROM t_user_data WHERE clerk = $1",
-                clerk.user_id().0
-            )
-            .fetch_one(&pg_pool)
-            .await
-            .unwrap()
-            .id
-        })
-        .await;
+    let user_id = users.to_user_pk(clerk.user_id(), pg_pool).await;
     let order_tickets: Vec<_> = orders.into_iter().map(|o| o.into()).collect();
 
     match engine

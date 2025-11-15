@@ -1,10 +1,46 @@
+use axum::body::Body;
 use axum::body::Bytes;
 use axum::extract::FromRequest;
+use axum::extract::FromRequestParts;
 use axum::extract::Request;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::Response;
 use futures::FutureExt;
+use futures::StreamExt;
+use tonic::IntoRequest;
+
+pub struct Parts<T>(pub T);
+
+impl<T, S> FromRequest<S> for Parts<T>
+where
+    T: FromRequestParts<S>,
+    S: Send + Sync,
+{
+    type Rejection = <T as FromRequestParts<S>>::Rejection;
+
+    fn from_request<'life0, 'async_trait>(
+        req: Request,
+        state: &'life0 S,
+    ) -> ::core::pin::Pin<
+        Box<
+            dyn ::core::future::Future<Output = Result<Self, Self::Rejection>>
+                + ::core::marker::Send
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
+        async move {
+            let (mut parts, _) = req.into_parts();
+            let t = <T as FromRequestParts<S>>::from_request_parts(&mut parts, state).await?;
+            Ok(Parts(t))
+        }
+        .boxed()
+    }
+}
 
 #[derive(Debug)]
 pub enum Either<T, U> {
@@ -72,12 +108,17 @@ where
     R: IntoResponse,
 {
     fn into_response(self) -> Response {
-        match self {
-            Self::Both(left, _right) => left.into_response(),
+        let this = match self {
+            Self::Both(left, right) => {
+                let (left, right) = (left.into_response(), right.into_response());
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+            }
             Self::FailedToReadBody => {
                 (StatusCode::BAD_REQUEST, "Failed to read request body").into_response()
             }
-        }
+        };
+        dbg!(&this);
+        this
     }
 }
 

@@ -76,18 +76,7 @@ pub async fn f(
     match engine
         .cancel_order(
             cancel_order_by,
-            users
-                .to_virtual_user_id(clerk.user_id(), || async move {
-                    sqlx::query!(
-                        "SELECT id FROM t_user_data WHERE clerk = $1",
-                        clerk.user_id().0
-                    )
-                    .fetch_one(&pg_pool)
-                    .await
-                    .unwrap()
-                    .id
-                })
-                .await,
+            users.to_user_pk(clerk.user_id(), pg_pool).await,
         )
         .await
     {

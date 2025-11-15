@@ -286,6 +286,11 @@ impl From<MsgError> for PlaceOrderError {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "Display quantity must be >= 1/15 of remaining quantity",
             ),
+            E::UserAccountNotFound {
+                user_id,
+                asset_code,
+            } => todo!(),
+            E::BalanceDatabase(error) => todo!(),
         };
 
         Self(a, b)
@@ -663,18 +668,7 @@ pub async fn f(
     match order_management
         .place_order(
             base_quote,
-            users
-                .to_virtual_user_id(clerk.user_id(), || async move {
-                    sqlx::query!(
-                        "SELECT id FROM t_user_data WHERE clerk = $1",
-                        clerk.user_id().0
-                    )
-                    .fetch_one(&pg_pool)
-                    .await
-                    .unwrap()
-                    .id
-                })
-                .await,
+            users.to_user_pk(clerk.user_id(), pg_pool).await,
             trade_add_order.into(),
         )
         .await

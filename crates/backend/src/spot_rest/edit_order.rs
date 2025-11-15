@@ -172,18 +172,7 @@ pub async fn f(
         .is_pair_enabled(&request.symbol)
         .ok_or((StatusCode::NOT_FOUND, "asset not enabled"))?;
 
-    let user_id = users
-        .to_virtual_user_id(clerk.user_id(), || async move {
-            sqlx::query!(
-                "SELECT id FROM t_user_data WHERE clerk = $1",
-                clerk.user_id().0
-            )
-            .fetch_one(&pg_pool)
-            .await
-            .unwrap()
-            .id
-        })
-        .await;
+    let user_id = users.to_user_pk(clerk.user_id(), pg_pool).await;
 
     let (base_quote, descriptor, order_uuid) = resolve_target_order(&engine, &user_id, &request)
         .await?

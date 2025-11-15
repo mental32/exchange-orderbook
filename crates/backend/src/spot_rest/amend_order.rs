@@ -91,18 +91,7 @@ pub async fn f(
         .transpose()?;
 
     let post_only = request.post_only.unwrap_or(false);
-    let user_id = users
-        .to_virtual_user_id(clerk.user_id(), || async move {
-            sqlx::query!(
-                "SELECT id FROM t_user_data WHERE clerk = $1",
-                clerk.user_id().0
-            )
-            .fetch_one(&pg_pool)
-            .await
-            .unwrap()
-            .id
-        })
-        .await;
+    let user_id = users.to_user_pk(clerk.user_id(), pg_pool).await;
 
     let amend_args = AmendOrderArgs {
         user_id,
