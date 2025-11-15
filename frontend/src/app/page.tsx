@@ -4,10 +4,55 @@ import { cn } from "@/lib/utils";
 import { SignedIn, SignedOut } from "@clerk/nextjs";
 import { ChartCandlestickIcon } from "lucide-react";
 import Link from "next/link";
-import { sql } from "@/db";
 
-export default async function App() {
+import { HyperAccountInfo } from "@/components/hyperliquid/account-info";
+import { HyperAnnouncement } from "@/components/hyperliquid/banner";
+import { HyperBottomLedger } from "@/components/hyperliquid/bottom-ledger";
+import { HyperFavoriteRibbon } from "@/components/hyperliquid/favorite-ribbon";
+import { HyperMarketCanvas } from "@/components/hyperliquid/market-canvas";
+import { HyperMarketSummary } from "@/components/hyperliquid/market-summary";
+import { HyperOrderBook } from "@/components/hyperliquid/order-book";
+import { HyperStatusBar } from "@/components/hyperliquid/status-bar";
+import { HyperTopBar } from "@/components/hyperliquid/top-bar";
+import { HyperTradePanel } from "@/components/hyperliquid/trade-panel";
 
+export default function App() {
+  return (
+    <div className="flex h-screen flex-col overflow-hidden bg-[#1B2429]">
+      <div className="sticky top-0 z-40 bg-[#020d14]">
+        <HyperTopBar />
+        <HyperAnnouncement />
+      </div>
+      <main className="flex-1 min-h-0 overflow-hidden overscroll-contain m-1">
+        <div className="h-full w-full min-h-0 flex gap-1">
+          <div className="flex flex-col flex-[4] gap-1">
+            <div className="flex gap-1 overflow-hidden">
+              <div className="flex-[3] flex flex-col gap-1">
+                <HyperFavoriteRibbon className="bg-background " />
+                <HyperMarketSummary className="bg-background " />
+                <HyperMarketCanvas className="bg-background " />
+              </div>
+              <HyperOrderBook className="flex-1 bg-background border border-[#12303c]" />
+            </div>
+            <HyperBottomLedger className="gap-1 flex-1" />
+          </div>
+          <div className="flex flex-col flex-1 gap-2">
+            <HyperTradePanel className="flex-[4] gap-2" />
+            <HyperAccountInfo className="flex-[1] gap-2 rounded-lg border border-[#0f232f] bg-[#061922] p-4" />
+          </div>
+        </div>
+      </main>
+      <div className="sticky bottom-0 z-40 bg-[#020d14]">
+        <HyperStatusBar />
+      </div>
+    </div>
+  );
+}
+
+// Legacy landing kept for reference. This preserves the original marketing
+// entry point without deleting the implementation. Update callers if we
+// want to restore the previous experience.
+export function LegacyLanding() {
   return (
     <div className={`antialiased flex flex-col min-h-screen`}>
       <header className="sticky top-0 z-40 w-full border-b bg-background">
@@ -15,7 +60,10 @@ export default async function App() {
           <div className="flex gap-6 md:gap-10">
             <Link href="/" className="flex items-center flex-row space-x-2">
               <ChartCandlestickIcon />
-              <span className="font-bold text-xl inline-block"> Crypto Exchange</span>
+              <span className="font-bold text-xl inline-block">
+                {" "}
+                Crypto Exchange
+              </span>
             </Link>
           </div>
           <div className="flex items-center space-x-4">
@@ -29,7 +77,10 @@ export default async function App() {
                 </Link>
               </SignedOut>
               <SignedIn>
-                <Link href="/c/" className={cn(buttonVariants({ variant: 'link' }))}>
+                <Link
+                  href="/c/"
+                  className={cn(buttonVariants({ variant: "link" }))}
+                >
                   My Account
                 </Link>
               </SignedIn>
@@ -50,7 +101,11 @@ export default async function App() {
                   Grow your portfolio in a fair and open financial system.
                 </p>
                 <div className="flex flex-col sm:flex-row gap-3">
-                  <Button asChild size="lg" className="bg-blue-600 hover:bg-blue-700 text-white">
+                  <Button
+                    asChild
+                    size="lg"
+                    className="bg-blue-600 hover:bg-blue-700 text-white"
+                  >
                     <Link href="/sign-up">Get Started</Link>
                   </Button>
                 </div>
