@@ -2,8 +2,8 @@ use crate::middleware::clerk::Clerk;
 use crate::middleware::clerk::ClerkUserId;
 use crate::middleware::either::Either;
 use crate::middleware::msgpack::Msgpack;
-use ap_actor::order_management::OrderManagement;
 use ap_actor::proc::MsgError;
+use ap_actor::proc_router::ProcRouter;
 use axum::Extension;
 use axum::extract::Json;
 use axum::extract::State;
@@ -619,7 +619,6 @@ impl From<TradeAddOrder> for matching_engine::order_ticket::OrderTicket {
             userref: order.userref,
             cl_ord_id: order.cl_ord_id,
             expiry_time: order.expiry_time,
-            volume: order.volume,
             secondary_price: order.secondary_price,
             order_flags: order.order_flags.unwrap_or_default(),
             validate_only: order.validate_only.unwrap_or(false),
@@ -634,7 +633,7 @@ pub struct TradeAddOrderResponse {
 }
 
 pub async fn f(
-    State(order_management): State<OrderManagement>,
+    State(proc_router): State<ProcRouter>,
     State(users): State<crate::Users>,
     State(pg_pool): State<sqlx::PgPool>,
     Extension(clerk): Extension<Clerk>,
@@ -658,17 +657,18 @@ pub async fn f(
 
     let () = trade_add_order.validate()?;
 
-    let Some(base_quote) = order_management.is_pair_enabled(&trade_add_order.symbol) else {
+    let Some(base_quote) = proc_router.is_pair_enabled(&trade_add_order.symbol) else {
         tracing::warn!("asset not enabled");
         return Err((StatusCode::NOT_FOUND, "asset not enabled"));
     };
 
     tracing::info!("placing order for asset");
 
-    match order_management
+    match proc_router
         .place_order(
             base_quote,
             users.to_user_pk(clerk.user_id(), pg_pool).await,
+            OrderUuid(uuid::Uuid::new_v4()),
             trade_add_order.into(),
         )
         .await

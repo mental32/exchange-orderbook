@@ -1,9 +1,9 @@
 use crate::middleware::clerk::Clerk;
 use crate::middleware::clerk::ClerkUserId;
-use ap_actor::order_management::OrderManagement;
 use ap_actor::proc::AmendOrderArgs;
 use ap_actor::proc::MsgError;
 use ap_actor::proc::OrderDescriptor;
+use ap_actor::proc_router::ProcRouter;
 use ap_actor::user_profile::OpenOrder;
 use axum::Extension;
 use axum::extract::Json;
@@ -160,7 +160,7 @@ struct EditOrderDescription {
 }
 
 pub async fn f(
-    State(engine): State<OrderManagement>,
+    State(proc_router): State<ProcRouter>,
     State(users): State<crate::Users>,
     State(pg_pool): State<PgPool>,
     Extension(clerk): Extension<Clerk>,
@@ -168,21 +168,22 @@ pub async fn f(
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
     request.ensure_supported()?;
 
-    let requested_pair = engine
+    let requested_pair = proc_router
         .is_pair_enabled(&request.symbol)
         .ok_or((StatusCode::NOT_FOUND, "asset not enabled"))?;
 
     let user_id = users.to_user_pk(clerk.user_id(), pg_pool).await;
 
-    let (base_quote, descriptor, order_uuid) = resolve_target_order(&engine, &user_id, &request)
-        .await?
-        .ok_or((StatusCode::NOT_FOUND, "order not found"))?;
+    let (base_quote, descriptor, order_uuid) =
+        resolve_target_order(&proc_router, &user_id, &request)
+            .await?
+            .ok_or((StatusCode::NOT_FOUND, "order not found"))?;
 
     if base_quote != requested_pair {
         return Err((StatusCode::BAD_REQUEST, "pair does not match order"));
     }
 
-    let last_trade_price = latest_trade_price(&engine, &base_quote);
+    let last_trade_price = latest_trade_price(&proc_router, &base_quote);
 
     let filled_quantity = descriptor.filled_quantity;
     let original_total_quantity = descriptor.filled_quantity + descriptor.remaining_quantity;
@@ -333,7 +334,7 @@ pub async fn f(
         return Ok(Json(response));
     }
 
-    let updated_uuid = engine
+    let updated_uuid = proc_router
         .amend_order(order_uuid, user_id, amend_args)
         .await
         .map_err(|e| {
@@ -394,7 +395,7 @@ pub async fn f(
 }
 
 async fn resolve_target_order(
-    engine: &OrderManagement,
+    proc_router: &ProcRouter,
     user_id: &ap_actor::VirtualUserId,
     request: &EditOrderRequest,
 ) -> Result<
@@ -410,7 +411,7 @@ async fn resolve_target_order(
             let uuid = uuid::Uuid::parse_str(raw)
                 .map_err(|_| (StatusCode::BAD_REQUEST, "invalid txid"))?;
             let order_uuid = OrderUuid(uuid);
-            let (base_quote, descriptor) = engine
+            let (base_quote, descriptor) = proc_router
                 .describe_order_any(*user_id, order_uuid)
                 .await
                 .map_err(|err| match err {
@@ -427,8 +428,9 @@ async fn resolve_target_order(
                 .try_into()
                 .map_err(|_| (StatusCode::BAD_REQUEST, "userref must be non-negative"))?;
 
-            let matches: Vec<OpenOrder> = engine
+            let matches: Vec<OpenOrder> = proc_router
                 .open_orders_for(user_id)
+                .await
                 .into_iter()
                 .filter(|order| order.userref == Some(userref_u32))
                 .collect();
@@ -444,7 +446,7 @@ async fn resolve_target_order(
             }
 
             let open_order = matches.into_iter().next().unwrap();
-            let descriptor = engine
+            let descriptor = proc_router
                 .describe_order(
                     open_order.base_quote.clone(),
                     *user_id,
@@ -600,7 +602,7 @@ fn nonzero_to_string(value: NonZeroDecimal) -> String {
 }
 
 fn latest_trade_price(
-    _engine: &OrderManagement,
+    _engine: &ProcRouter,
     _base_quote: &matching_engine::asset_pair::BaseQuote,
 ) -> Option<NonZeroDecimal> {
     // Market data not implemented

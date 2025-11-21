@@ -1,6 +1,6 @@
 use crate::middleware::clerk::Clerk;
-use ap_actor::order_management::OrderManagement;
 use ap_actor::proc::AmendOrderArgs;
+use ap_actor::proc_router::ProcRouter;
 use axum::Extension;
 use axum::extract::Json;
 use axum::extract::State;
@@ -29,7 +29,7 @@ pub struct AmendOrderResponse {
 }
 
 pub async fn f(
-    State(engine): State<OrderManagement>,
+    State(proc_router): State<ProcRouter>,
     State(users): State<crate::Users>,
     State(pg_pool): State<PgPool>,
     Extension(clerk): Extension<Clerk>,
@@ -103,7 +103,7 @@ pub async fn f(
         post_only,
     };
 
-    let amended_uuid = engine
+    let amended_uuid = proc_router
         .amend_order(OrderUuid(order_uuid), user_id, amend_args)
         .await
         .map_err(|e| {

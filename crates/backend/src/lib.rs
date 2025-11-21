@@ -5,8 +5,8 @@ use crate::middleware::clerk::ClerkUserId;
 use crate::middleware::rate_limit::RateLimitState;
 use crate::users::Users;
 use anyhow::Context as _;
-use ap_actor::order_management::OrderManagement;
 use ap_actor::proc::launch_processors_for_pairs;
+use ap_actor::proc_router::ProcRouter;
 use axum::Router;
 use axum::extract::FromRef;
 use axum::http::header;
@@ -38,7 +38,7 @@ pub mod users;
 
 #[derive(Debug, Clone, FromRef)]
 pub struct AppState {
-    order_management: OrderManagement,
+    proc_router: ProcRouter,
     rate_limit_state: RateLimitState,
     users: Users,
     pg_pool: PgPool,
@@ -94,7 +94,7 @@ pub async fn serve(
         launch_processors_for_pairs(t_trading_asset_pairs, pg_pool.clone()).await?;
 
     let state = AppState {
-        order_management: OrderManagement::new(symbol_vocabulary, asset_processors),
+        proc_router: ProcRouter::new(symbol_vocabulary, asset_processors),
         rate_limit_state: RateLimitState::default(),
         users: Users::default(),
         pg_pool: pg_pool.clone(),

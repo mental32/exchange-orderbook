@@ -1,6 +1,6 @@
 use crate::middleware::clerk::Clerk;
-use ap_actor::order_management::OrderManagement;
 use ap_actor::proc::BroadcastEvent;
+use ap_actor::proc_router::ProcRouter;
 use axum::Extension;
 use axum::extract::State;
 use axum::extract::WebSocketUpgrade;
@@ -52,7 +52,7 @@ enum WsRpc {
 
 async fn socket_loop(
     mut socket: WebSocket,
-    order_management: OrderManagement,
+    order_management: ProcRouter,
     Clerk { user: clerk_user }: Clerk,
 ) -> anyhow::Result<()> {
     socket
@@ -173,7 +173,7 @@ async fn socket_loop(
 }
 
 pub async fn f(
-    State(order_management): State<OrderManagement>,
+    State(proc_router): State<ProcRouter>,
     Extension(clerk): Extension<Clerk>,
     websocket_upgrade: WebSocketUpgrade,
 ) -> impl IntoResponse {
@@ -182,7 +182,7 @@ pub async fn f(
             tracing::error!(?error, "websocket upgrade failed");
         })
         .on_upgrade(move |socket| async move {
-            if let Err(err) = socket_loop(socket, order_management, clerk).await {
+            if let Err(err) = socket_loop(socket, proc_router, clerk).await {
                 tracing::error!(?err, "websocket failure");
                 return;
             }

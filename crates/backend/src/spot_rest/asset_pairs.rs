@@ -1,9 +1,9 @@
 use crate::middleware::either::Either;
 use crate::middleware::either::Parts;
-use ap_actor::order_management;
-use ap_actor::order_management::AssetClass;
-use ap_actor::order_management::OrderManagement;
 use ap_actor::proc::ProcHandle;
+use ap_actor::proc_router;
+use ap_actor::proc_router::AssetClass;
+use ap_actor::proc_router::ProcRouter;
 use axum::extract::Json;
 use axum::extract::Query;
 use axum::extract::State;
@@ -102,7 +102,7 @@ pub struct AssetPairInfo {
 
 pub async fn f(
     State(pg_pool): State<sqlx::PgPool>,
-    State(order_management): State<OrderManagement>,
+    State(proc_router): State<ProcRouter>,
     body: Either<Json<AssetPairsRequest>, Parts<Query<AssetPairsRequest>>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, &'static str)> {
     let AssetPairsRequest {
@@ -114,8 +114,8 @@ pub async fn f(
         Either::Left(Json(t)) | Either::Right(Parts(Query(t))) => t,
     };
 
-    let normalized_pairs: Vec<BaseQuote> = order_management
-        .get_active_processors()
+    let normalized_pairs: Vec<BaseQuote> = proc_router
+        .iter_active_processors()
         .map(|proc_handle: &ProcHandle| proc_handle.base_quote.clone())
         .collect();
 

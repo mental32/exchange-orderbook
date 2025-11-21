@@ -5,7 +5,7 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 use serde::Serialize;
 
-use ap_actor::order_management::OrderManagement;
+use ap_actor::proc_router::ProcRouter;
 
 #[derive(Debug, Deserialize)]
 pub struct DepthRequest {
@@ -22,7 +22,7 @@ struct DepthLevels {
 
 /// Get order book (depth) data for one or more asset pairs
 pub async fn f(
-    State(_engine): State<OrderManagement>,
+    State(_engine): State<ProcRouter>,
     Json(_payload): Json<DepthRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
     Err::<Json<()>, _>((
