@@ -1,7 +1,3 @@
-use tokio::sync::oneshot;
-
-use ap_actor::order_management::PlaceOrderArgs;
-use ap_actor::proc::MsgIn;
 use ap_actor::proc::MsgOut;
 use ap_actor::test::TestFixture;
 use ap_actor::test::TestUser;
@@ -20,7 +16,9 @@ async fn test_take_profit_does_not_trigger_prematurely(pg_pool: sqlx::PgPool) {
     let user2 = TestUser::random().create(&pg_pool).await;
 
     let TestFixture {
-        ap_sender, btc_usd, ..
+        proc_router,
+        btc_usd,
+        ..
     } = test_ap_actor_fixture(&pg_pool).await;
 
     // User 1 places a limit buy at 50k
@@ -35,22 +33,18 @@ async fn test_take_profit_does_not_trigger_prematurely(pg_pool: sqlx::PgPool) {
     )
     .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
     .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
-    .volume(dec!(0.1))
     .build()
     .unwrap();
 
-    let limit_buy = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user1.user_id.clone(),
-        order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-        order_details: limit_buy_order_details,
-    });
-
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, limit_buy)).await.unwrap();
-        resp_rx.await.unwrap()
-    };
+    let resp = proc_router
+        .place_order(
+            btc_usd.clone(),
+            user1.user_id.clone(),
+            OrderUuid(uuid::Uuid::new_v4()),
+            limit_buy_order_details,
+        )
+        .await
+        .map(|_| MsgOut::OrderPlaced);
     assert!(
         matches!(resp, Ok(MsgOut::OrderPlaced)),
         "Limit buy should be placed"
@@ -68,26 +62,22 @@ async fn test_take_profit_does_not_trigger_prematurely(pg_pool: sqlx::PgPool) {
     )
     .quantity(NonZeroDecimal::new(dec!(0.05)).unwrap())
     .display_quantity(NonZeroDecimal::new(dec!(0.05)).unwrap())
-    .volume(dec!(0.05))
     .build()
     .unwrap();
 
-    let take_profit_sell = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user2.user_id.clone(),
-        order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-        order_details: take_profit_sell_order_details,
-    });
-
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, take_profit_sell)).await.unwrap();
-        resp_rx.await.unwrap()
-    };
+    let resp = proc_router
+        .place_order(
+            btc_usd.clone(),
+            user2.user_id.clone(),
+            OrderUuid(uuid::Uuid::new_v4()),
+            take_profit_sell_order_details,
+        )
+        .await
+        .map(|_| MsgOut::OrderPlaced);
     assert_eq!(resp, Ok(MsgOut::OrderPlaced));
 
     // Verify BTC is still reserved (not returned)
-    let btc_balance_user2 = user2.balance(&pg_pool, user2.btc_account_id).await;
+    let btc_balance_user2 = user2.compute_balance(&pg_pool, user2.btc_account_id).await;
 
     // Should still have 0.05 BTC reserved
     assert_eq!(
@@ -109,26 +99,22 @@ async fn test_take_profit_does_not_trigger_prematurely(pg_pool: sqlx::PgPool) {
     )
     .quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
     .display_quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
-    .volume(dec!(0.01))
     .build()
     .unwrap();
 
-    let market_sell = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user2.user_id.clone(),
-        order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-        order_details: market_sell_order_details,
-    });
-
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, market_sell)).await.unwrap();
-        resp_rx.await.unwrap()
-    };
+    let resp = proc_router
+        .place_order(
+            btc_usd.clone(),
+            user2.user_id.clone(),
+            OrderUuid(uuid::Uuid::new_v4()),
+            market_sell_order_details,
+        )
+        .await
+        .map(|_| MsgOut::OrderPlaced);
     assert_eq!(resp, Ok(MsgOut::OrderPlaced));
 
     // BTC should still be reserved (take-profit not triggered)
-    let btc_balance_user2_after = user2.balance(&pg_pool, user2.btc_account_id).await;
+    let btc_balance_user2_after = user2.compute_balance(&pg_pool, user2.btc_account_id).await;
 
     // User 2 sold 0.01 BTC, so should have 10 - 0.01 - 0.05 (reserved) = 9.94 BTC
     assert_eq!(

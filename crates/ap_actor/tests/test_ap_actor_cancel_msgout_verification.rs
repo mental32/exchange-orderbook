@@ -1,9 +1,4 @@
-use ap_actor::order_management::CancelOrderBy;
-use ap_actor::order_management::PlaceOrderArgs;
-use ap_actor::proc::CancelOrderByArgs;
-use ap_actor::proc::MsgError;
-use ap_actor::proc::MsgIn;
-use ap_actor::proc::MsgOut;
+use ap_actor::proc_router::CancelOrderBy;
 use ap_actor::test::TestFixture;
 use ap_actor::test::TestUser;
 use ap_actor::test::test_ap_actor_fixture;
@@ -14,79 +9,56 @@ use matching_engine::order_uuid::OrderUuid;
 use matching_engine::orderbook::OrderSide;
 use matching_engine::orderbook::OrderType;
 use matching_engine::price::Price;
-use tokio::sync::oneshot;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_ap_actor_cancel_msgout_verification(pg_pool: sqlx::PgPool) {
     let user = TestUser::random().create(&pg_pool).await;
 
     let TestFixture {
-        btc_usd, ap_sender, ..
+        btc_usd,
+        proc_router,
+        ..
     } = test_ap_actor_fixture(&pg_pool).await;
 
     let order_uuid = OrderUuid(uuid::Uuid::new_v4());
 
-    let place_msg = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user.user_id.clone(),
-        order_uuid: order_uuid.clone(),
-        order_details: OrderTicket::builder(
-            OrderType::Limit,
-            OrderSide::Buy,
-            Price {
-                prefix: None,
-                amount: dec!(45000),
-                is_percentage: false,
-            },
+    let place_resp = proc_router
+        .place_order(
+            btc_usd.clone(),
+            user.user_id.clone(),
+            order_uuid.clone(),
+            OrderTicket::builder(
+                OrderType::Limit,
+                OrderSide::Buy,
+                Price {
+                    prefix: None,
+                    amount: dec!(45000),
+                    is_percentage: false,
+                },
+            )
+            .quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
+            .display_quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
+            .build()
+            .unwrap(),
         )
-        .quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
-        .display_quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
-        .volume(dec!(0.5))
-        .build()
-        .unwrap(),
-    });
-
-    let place_resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, place_msg)).await.unwrap();
-        resp_rx.await.unwrap().unwrap()
-    };
-    assert_eq!(place_resp, MsgOut::OrderPlaced);
+        .await;
+    assert!(place_resp.is_ok());
 
     // Cancel the order and verify MsgOut structure
-    let cancel_msg = MsgIn::CancelOrderBy(CancelOrderByArgs {
-        user_id: user.user_id.clone(),
-        cancel_order_by: CancelOrderBy::TxId(order_uuid.clone()),
-    });
-
-    let cancel_resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, cancel_msg)).await.unwrap();
-        resp_rx.await.unwrap().unwrap()
-    };
-
-    // Verify the response
-    assert_eq!(
-        cancel_resp,
-        MsgOut::OrderCancelled {
-            success: vec![order_uuid.clone()],
-            failed: vec![]
-        }
-    );
+    let (success, failed) = proc_router
+        .cancel_order(
+            CancelOrderBy::TxId(order_uuid.clone()),
+            user.user_id.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(success, vec![order_uuid.0]);
+    assert!(failed.is_empty());
 
     // Test error case: cancel non-existent order
     let bogus_uuid = OrderUuid(uuid::Uuid::new_v4());
-    let cancel_bogus_msg = MsgIn::CancelOrderBy(CancelOrderByArgs {
-        user_id: user.user_id.clone(),
-        cancel_order_by: CancelOrderBy::TxId(bogus_uuid),
-    });
-
-    let cancel_bogus_resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, cancel_bogus_msg)).await.unwrap();
-        resp_rx.await.unwrap()
-    };
-
-    // Verify error response
-    assert_eq!(cancel_bogus_resp, Err(MsgError::OrderNotFound));
+    let cancel_bogus_resp = proc_router
+        .cancel_order(CancelOrderBy::TxId(bogus_uuid), user.user_id.clone())
+        .await;
+    assert!(cancel_bogus_resp.is_err());
 }

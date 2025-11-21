@@ -1,6 +1,4 @@
-use ap_actor::order_management::PlaceOrderArgs;
-use ap_actor::proc::MsgIn;
-use ap_actor::proc::MsgOut;
+use ap_actor::proc_router::PlaceOrderArgs;
 use ap_actor::test::TestFixture;
 use ap_actor::test::TestUser;
 use ap_actor::test::test_ap_actor_fixture;
@@ -11,17 +9,18 @@ use matching_engine::order_uuid::OrderUuid;
 use matching_engine::orderbook::OrderSide;
 use matching_engine::orderbook::OrderType;
 use matching_engine::price::Price;
-use tokio::sync::oneshot;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_ap_actor_order_placement(pg_pool: sqlx::PgPool) {
     let user = TestUser::random().create(&pg_pool).await;
 
     let TestFixture {
-        ap_sender, btc_usd, ..
+        proc_router,
+        btc_usd,
+        ..
     } = test_ap_actor_fixture(&pg_pool).await;
 
-    let limit_buy_order = MsgIn::PlaceOrder(PlaceOrderArgs {
+    let limit_buy_order = PlaceOrderArgs {
         base_quote: btc_usd.clone(),
         user_id: user.user_id,
         order_uuid: OrderUuid(uuid::Uuid::new_v4()),
@@ -36,17 +35,19 @@ async fn test_ap_actor_order_placement(pg_pool: sqlx::PgPool) {
         )
         .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
         .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
-        .volume(dec!(0.1))
         .build()
         .unwrap(),
-    });
-
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, limit_buy_order)).await.unwrap();
-        resp_rx.await.unwrap()
     };
-    assert_eq!(resp, Ok(MsgOut::OrderPlaced));
+
+    let resp = proc_router
+        .place_order(
+            btc_usd.clone(),
+            user.user_id,
+            limit_buy_order.order_uuid,
+            limit_buy_order.order_details,
+        )
+        .await;
+    assert!(resp.is_ok());
 
     let event_count = sqlx::query_scalar!("SELECT COUNT(*) FROM t_trading_event_source")
         .fetch_one(&pg_pool)
@@ -57,7 +58,7 @@ async fn test_ap_actor_order_placement(pg_pool: sqlx::PgPool) {
         "At least one event should be logged in t_trading_event_source"
     );
 
-    let balance = user.balance(&pg_pool, user.usd_account_id).await;
+    let balance = user.compute_balance(&pg_pool, user.usd_account_id).await;
 
     assert_eq!(
         balance,

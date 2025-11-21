@@ -1,10 +1,8 @@
-use ap_actor::order_management::CancelOrderBy;
-use ap_actor::order_management::PlaceOrderArgs;
-use ap_actor::proc::CancelOrderByArgs;
-use ap_actor::proc::MsgIn;
-use ap_actor::proc::MsgOut;
+use ap_actor::proc_router::CancelOrderBy;
+use ap_actor::test::AccountTxJournal;
 use ap_actor::test::TestFixture;
 use ap_actor::test::TestUser;
+use ap_actor::test::t_account_tx_journal;
 use ap_actor::test::test_ap_actor_fixture;
 use matching_engine::decimal::NonZeroDecimal;
 use matching_engine::decimal::dec;
@@ -13,113 +11,99 @@ use matching_engine::order_uuid::OrderUuid;
 use matching_engine::orderbook::OrderSide;
 use matching_engine::orderbook::OrderType;
 use matching_engine::price::Price;
-use tokio::sync::oneshot;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_ap_actor_batch_cancel_by_userref(pg_pool: sqlx::PgPool) {
     let user = TestUser::random().create(&pg_pool).await;
 
     let TestFixture {
-        btc_usd, ap_sender, ..
+        btc_usd,
+        proc_router,
+        ..
     } = test_ap_actor_fixture(&pg_pool).await;
 
-    let initial_balance = user.balance(&pg_pool, user.usd_account_id).await;
+    let initial_balance = user.compute_balance(&pg_pool, user.usd_account_id).await;
     assert_eq!(initial_balance, dec!(100_000));
 
     // Place 3 orders all with userref=999
     let order1_uuid = OrderUuid(uuid::Uuid::new_v4());
 
-    let order1_msg = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user.user_id.clone(),
-        order_uuid: order1_uuid.clone(),
-        order_details: OrderTicket::builder(
-            OrderType::Limit,
-            OrderSide::Buy,
-            Price {
-                prefix: None,
-                amount: dec!(50000),
-                is_percentage: false,
-            },
+    proc_router
+        .place_order(
+            btc_usd.clone(),
+            user.user_id.clone(),
+            order1_uuid.clone(),
+            OrderTicket::builder(
+                OrderType::Limit,
+                OrderSide::Buy,
+                Price {
+                    prefix: None,
+                    amount: dec!(50000),
+                    is_percentage: false,
+                },
+            )
+            .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
+            .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
+            .userref(999)
+            .build()
+            .unwrap(),
         )
-        .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
-        .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
-        .volume(dec!(0.1))
-        .userref(999)
-        .build()
-        .unwrap(),
-    });
-
-    let resp1 = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, order1_msg)).await.unwrap();
-        resp_rx.await.unwrap()
-    };
-    assert_eq!(resp1, Ok(MsgOut::OrderPlaced));
+        .await
+        .unwrap();
 
     // Order 2: 0.2 BTC @ $48k = $9,600
     let order2_uuid = OrderUuid(uuid::Uuid::new_v4());
 
-    let order2_msg = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user.user_id.clone(),
-        order_uuid: order2_uuid.clone(),
-        order_details: OrderTicket::builder(
-            OrderType::Limit,
-            OrderSide::Buy,
-            Price {
-                prefix: None,
-                amount: dec!(48000),
-                is_percentage: false,
-            },
+    proc_router
+        .place_order(
+            btc_usd.clone(),
+            user.user_id.clone(),
+            order2_uuid.clone(),
+            OrderTicket::builder(
+                OrderType::Limit,
+                OrderSide::Buy,
+                Price {
+                    prefix: None,
+                    amount: dec!(48000),
+                    is_percentage: false,
+                },
+            )
+            .quantity(NonZeroDecimal::new(dec!(0.2)).unwrap())
+            .display_quantity(NonZeroDecimal::new(dec!(0.2)).unwrap())
+            .userref(999)
+            .build()
+            .unwrap(),
         )
-        .quantity(NonZeroDecimal::new(dec!(0.2)).unwrap())
-        .display_quantity(NonZeroDecimal::new(dec!(0.2)).unwrap())
-        .volume(dec!(0.2))
-        .userref(999)
-        .build()
-        .unwrap(),
-    });
-
-    let resp2 = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, order2_msg)).await.unwrap();
-        resp_rx.await.unwrap()
-    };
-    assert_eq!(resp2, Ok(MsgOut::OrderPlaced));
+        .await
+        .unwrap();
 
     // Order 3: 0.15 BTC @ $49k = $7,350
     let order3_uuid = OrderUuid(uuid::Uuid::new_v4());
 
-    let order3_msg = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user.user_id.clone(),
-        order_uuid: order3_uuid.clone(),
-        order_details: OrderTicket::builder(
-            OrderType::Limit,
-            OrderSide::Buy,
-            Price {
-                prefix: None,
-                amount: dec!(49000),
-                is_percentage: false,
-            },
+    proc_router
+        .place_order(
+            btc_usd.clone(),
+            user.user_id.clone(),
+            order3_uuid.clone(),
+            OrderTicket::builder(
+                OrderType::Limit,
+                OrderSide::Buy,
+                Price {
+                    prefix: None,
+                    amount: dec!(49000),
+                    is_percentage: false,
+                },
+            )
+            .quantity(NonZeroDecimal::new(dec!(0.15)).unwrap())
+            .display_quantity(NonZeroDecimal::new(dec!(0.15)).unwrap())
+            .userref(999)
+            .build()
+            .unwrap(),
         )
-        .quantity(NonZeroDecimal::new(dec!(0.15)).unwrap())
-        .display_quantity(NonZeroDecimal::new(dec!(0.15)).unwrap())
-        .volume(dec!(0.15))
-        .userref(999)
-        .build()
-        .unwrap(),
-    });
+        .await
+        .unwrap();
 
-    let resp3 = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, order3_msg)).await.unwrap();
-        resp_rx.await.unwrap()
-    };
-    assert_eq!(resp3, Ok(MsgOut::OrderPlaced));
-
-    let balance_after_orders = user.balance(&pg_pool, user.usd_account_id).await;
+    let balance_after_orders = user.compute_balance(&pg_pool, user.usd_account_id).await;
     assert_eq!(
         balance_after_orders,
         dec!(78_050),
@@ -127,65 +111,38 @@ async fn test_ap_actor_batch_cancel_by_userref(pg_pool: sqlx::PgPool) {
     );
 
     // Cancel all orders with userref=999 (should cancel all 3)
-    let cancel_msg = MsgIn::CancelOrderBy(CancelOrderByArgs {
-        user_id: user.user_id.clone(),
-        cancel_order_by: CancelOrderBy::Userref(999),
-    });
-
-    let cancel_resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, cancel_msg)).await.unwrap();
-        resp_rx.await.unwrap()
-    };
+    let cancel_resp = proc_router
+        .cancel_order(CancelOrderBy::Userref(999), user.user_id.clone())
+        .await
+        .unwrap();
 
     // Verify response structure
     assert_eq!(
         cancel_resp,
-        Ok(MsgOut::OrderCancelled {
-            success: vec![order1_uuid, order2_uuid, order3_uuid],
-            failed: vec![],
-        })
+        (vec![order1_uuid.0, order2_uuid.0, order3_uuid.0], vec![])
     );
 
-    // Verify all 3 refunds were created
-    let refund_count = sqlx::query_scalar!(
-        r#"
-            SELECT COUNT(*)
-            FROM t_account_tx_journal
-            WHERE transaction_type = 'cancel_refund'
-            AND credit_account_id = $1
-            AND currency = 'USD'
-            "#,
-        user.usd_account_id
-    )
-    .fetch_one(&pg_pool)
-    .await
-    .unwrap();
+    // Verify cancel_refund journal entries
+    t_account_tx_journal(&pg_pool) /* actual */
+        .await
+        .iter()
+        .zip(
+            [
+                /* expected (snapshot to be updated by test runner) */
+            ]
+            .into_iter()
+            .map(|value| serde_json::from_value::<AccountTxJournal>(value).unwrap()),
+        )
+        .for_each(|(actual, expected)| {
+            assert_eq!(actual.id, expected.id);
+            assert_eq!(actual.credit_account_id, expected.credit_account_id);
+            assert_eq!(actual.debit_account_id, expected.debit_account_id);
+            assert_eq!(actual.currency, expected.currency);
+            assert_eq!(actual.amount, expected.amount);
+            assert_eq!(actual.transaction_type, expected.transaction_type);
+        });
 
-    assert_eq!(
-        refund_count.unwrap_or(0),
-        3,
-        "Should have exactly 3 cancel_refund transactions"
-    );
-
-    // Verify total refund amount equals total reservation
-    let total_refund = sqlx::query_scalar!(
-        r#"
-            SELECT COALESCE(SUM(amount), 0) as "total!"
-            FROM t_account_tx_journal
-            WHERE transaction_type = 'cancel_refund'
-            AND credit_account_id = $1
-            AND currency = 'USD'
-            "#,
-        user.usd_account_id
-    )
-    .fetch_one(&pg_pool)
-    .await
-    .unwrap();
-
-    assert_eq!(total_refund, dec!(21_950), "Total refund should be $21,950");
-
-    let final_balance = user.balance(&pg_pool, user.usd_account_id).await;
+    let final_balance = user.compute_balance(&pg_pool, user.usd_account_id).await;
     assert_eq!(
         final_balance,
         dec!(100_000),

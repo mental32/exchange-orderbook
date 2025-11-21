@@ -1,7 +1,3 @@
-use tokio::sync::oneshot;
-
-use ap_actor::order_management::PlaceOrderArgs;
-use ap_actor::proc::MsgIn;
 use ap_actor::proc::MsgOut;
 use ap_actor::test::TestFixture;
 use ap_actor::test::TestUser;
@@ -20,7 +16,9 @@ async fn test_stop_loss_limit_sell_triggered(pg_pool: sqlx::PgPool) {
     let user2 = TestUser::random().create(&pg_pool).await;
 
     let TestFixture {
-        btc_usd, ap_sender, ..
+        btc_usd,
+        proc_router,
+        ..
     } = test_ap_actor_fixture(&pg_pool).await;
 
     // Establish last_traded_price at $50,000 using crossing limit orders
@@ -36,26 +34,19 @@ async fn test_stop_loss_limit_sell_triggered(pg_pool: sqlx::PgPool) {
     )
     .quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
     .display_quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
-    .volume(dec!(0.01))
     .build()
     .unwrap();
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender
-            .send((
-                resp_tx,
-                MsgIn::PlaceOrder(PlaceOrderArgs {
-                    base_quote: btc_usd.clone(),
-                    user_id: user1.user_id.clone(),
-                    order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: buy_limit_order_details,
-                }),
-            ))
-            .await
-            .unwrap();
-        resp_rx.await.unwrap().unwrap()
-    };
+    let resp = proc_router
+        .place_order(
+            btc_usd.clone(),
+            user1.user_id.clone(),
+            OrderUuid(uuid::Uuid::new_v4()),
+            buy_limit_order_details,
+        )
+        .await
+        .map(|_| MsgOut::OrderPlaced)
+        .unwrap();
     assert_eq!(resp, MsgOut::OrderPlaced);
 
     // User 2 places sell limit at $50k (crosses with user 1's buy limit)
@@ -70,26 +61,19 @@ async fn test_stop_loss_limit_sell_triggered(pg_pool: sqlx::PgPool) {
     )
     .quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
     .display_quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
-    .volume(dec!(0.01))
     .build()
     .unwrap();
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender
-            .send((
-                resp_tx,
-                MsgIn::PlaceOrder(PlaceOrderArgs {
-                    base_quote: btc_usd.clone(),
-                    user_id: user2.user_id.clone(),
-                    order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: sell_limit_order_details,
-                }),
-            ))
-            .await
-            .unwrap();
-        resp_rx.await.unwrap().unwrap()
-    };
+    let resp = proc_router
+        .place_order(
+            btc_usd.clone(),
+            user2.user_id.clone(),
+            OrderUuid(uuid::Uuid::new_v4()),
+            sell_limit_order_details,
+        )
+        .await
+        .map(|_| MsgOut::OrderPlaced)
+        .unwrap();
     assert_eq!(resp, MsgOut::OrderPlaced);
 
     // Place StopLossLimit sell with trigger at $48,000 and limit at $47,000
@@ -104,7 +88,6 @@ async fn test_stop_loss_limit_sell_triggered(pg_pool: sqlx::PgPool) {
     )
     .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
     .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
-    .volume(dec!(0.1))
     .secondary_price(Price {
         prefix: None,
         amount: dec!(47000),
@@ -113,26 +96,20 @@ async fn test_stop_loss_limit_sell_triggered(pg_pool: sqlx::PgPool) {
     .build()
     .unwrap();
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender
-            .send((
-                resp_tx,
-                MsgIn::PlaceOrder(PlaceOrderArgs {
-                    base_quote: btc_usd.clone(),
-                    user_id: user1.user_id.clone(),
-                    order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: stop_loss_limit_sell_order_details,
-                }),
-            ))
-            .await
-            .unwrap();
-        resp_rx.await.unwrap().unwrap()
-    };
+    let resp = proc_router
+        .place_order(
+            btc_usd.clone(),
+            user1.user_id.clone(),
+            OrderUuid(uuid::Uuid::new_v4()),
+            stop_loss_limit_sell_order_details,
+        )
+        .await
+        .map(|_| MsgOut::OrderPlaced)
+        .unwrap();
     assert_eq!(resp, MsgOut::OrderPlaced);
 
     // Verify BTC reserved (0.1 BTC)
-    let btc_balance = user1.balance(&pg_pool, user1.btc_account_id).await;
+    let btc_balance = user1.compute_balance(&pg_pool, user1.btc_account_id).await;
 
     assert_eq!(
         btc_balance,
@@ -153,26 +130,19 @@ async fn test_stop_loss_limit_sell_triggered(pg_pool: sqlx::PgPool) {
     )
     .quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
     .display_quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
-    .volume(dec!(0.01))
     .build()
     .unwrap();
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender
-            .send((
-                resp_tx,
-                MsgIn::PlaceOrder(PlaceOrderArgs {
-                    base_quote: btc_usd.clone(),
-                    user_id: user1.user_id.clone(),
-                    order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: buy_limit_low_order_details,
-                }),
-            ))
-            .await
-            .unwrap();
-        resp_rx.await.unwrap().unwrap()
-    };
+    let resp = proc_router
+        .place_order(
+            btc_usd.clone(),
+            user1.user_id.clone(),
+            OrderUuid(uuid::Uuid::new_v4()),
+            buy_limit_low_order_details,
+        )
+        .await
+        .map(|_| MsgOut::OrderPlaced)
+        .unwrap();
     assert_eq!(resp, MsgOut::OrderPlaced);
 
     // User 2 sells at $46k to push price below trigger ($48k)
@@ -187,26 +157,18 @@ async fn test_stop_loss_limit_sell_triggered(pg_pool: sqlx::PgPool) {
     )
     .quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
     .display_quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
-    .volume(dec!(0.01))
     .build()
     .unwrap();
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender
-            .send((
-                resp_tx,
-                MsgIn::PlaceOrder(PlaceOrderArgs {
-                    base_quote: btc_usd.clone(),
-                    user_id: user2.user_id.clone(),
-                    order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: sell_trigger_order_details,
-                }),
-            ))
-            .await
-            .unwrap();
-        resp_rx.await.unwrap()
-    };
+    let resp = proc_router
+        .place_order(
+            btc_usd.clone(),
+            user2.user_id.clone(),
+            OrderUuid(uuid::Uuid::new_v4()),
+            sell_trigger_order_details,
+        )
+        .await
+        .map(|_| MsgOut::OrderPlaced);
     assert_eq!(resp, Ok(MsgOut::OrderPlaced));
 
     // Give triggering some time to execute
@@ -225,33 +187,26 @@ async fn test_stop_loss_limit_sell_triggered(pg_pool: sqlx::PgPool) {
     )
     .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
     .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
-    .volume(dec!(0.1))
     .build()
     .unwrap();
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender
-            .send((
-                resp_tx,
-                MsgIn::PlaceOrder(PlaceOrderArgs {
-                    base_quote: btc_usd.clone(),
-                    user_id: user2.user_id.clone(),
-                    order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-                    order_details: buy_at_limit_order_details,
-                }),
-            ))
-            .await
-            .unwrap();
-        resp_rx.await.unwrap().unwrap()
-    };
+    let resp = proc_router
+        .place_order(
+            btc_usd.clone(),
+            user2.user_id.clone(),
+            OrderUuid(uuid::Uuid::new_v4()),
+            buy_at_limit_order_details,
+        )
+        .await
+        .map(|_| MsgOut::OrderPlaced)
+        .unwrap();
     assert_eq!(resp, MsgOut::OrderPlaced);
 
     // Give execution some time
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // Verify BTC balance - user should have received BTC from buys and sold via stop-loss-limit
-    let btc_final = user1.balance(&pg_pool, user1.btc_account_id).await;
+    let btc_final = user1.compute_balance(&pg_pool, user1.btc_account_id).await;
 
     // Verify BTC was sold via stop-loss-limit
     // Expected flow: 10 + 0.01 (first buy) + 0.01 (trigger buy) - 0.1 (stop-loss-limit sell) = 9.92

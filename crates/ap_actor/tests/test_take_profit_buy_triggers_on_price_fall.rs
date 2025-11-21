@@ -1,7 +1,3 @@
-use tokio::sync::oneshot;
-
-use ap_actor::order_management::PlaceOrderArgs;
-use ap_actor::proc::MsgIn;
 use ap_actor::proc::MsgOut;
 use ap_actor::test::TestFixture;
 use ap_actor::test::TestUser;
@@ -20,70 +16,68 @@ async fn test_take_profit_buy_triggers_on_price_fall(pg_pool: sqlx::PgPool) {
     let user2 = TestUser::random().create(&pg_pool).await;
 
     let TestFixture {
-        ap_sender, btc_usd, ..
+        proc_router,
+        btc_usd,
+        ..
     } = test_ap_actor_fixture(&pg_pool).await;
 
     // User 1 places a limit sell at 50k (to set market price)
-    let limit_sell = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user1.user_id.clone(),
-        order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-        order_details: OrderTicket::builder(
-            OrderType::Limit,
-            OrderSide::Sell,
-            Price {
-                prefix: None,
-                amount: dec!(50000),
-                is_percentage: false,
-            },
-        )
-        .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
-        .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
-        .volume(dec!(0.1))
-        .build()
-        .unwrap(),
-    });
+    let limit_sell = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Sell,
+        Price {
+            prefix: None,
+            amount: dec!(50000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
+    .build()
+    .unwrap();
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, limit_sell)).await.unwrap();
-        resp_rx.await.unwrap()
-    };
+    let resp = proc_router
+        .place_order(
+            btc_usd.clone(),
+            user1.user_id.clone(),
+            OrderUuid(uuid::Uuid::new_v4()),
+            limit_sell,
+        )
+        .await
+        .map(|_| MsgOut::OrderPlaced);
     assert!(
         matches!(resp, Ok(MsgOut::OrderPlaced)),
         "Limit sell should be placed"
     );
 
     // User 2 places a buy TakeProfit at 45k (should trigger when price falls to 45k)
-    let take_profit_buy = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user2.user_id.clone(),
-        order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-        order_details: OrderTicket::builder(
-            OrderType::TakeProfit,
-            OrderSide::Buy,
-            Price {
-                prefix: None,
-                amount: dec!(45000),
-                is_percentage: false,
-            },
-        )
-        .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
-        .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
-        .volume(dec!(0.1))
-        .build()
-        .unwrap(),
-    });
+    let take_profit_buy = OrderTicket::builder(
+        OrderType::TakeProfit,
+        OrderSide::Buy,
+        Price {
+            prefix: None,
+            amount: dec!(45000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
+    .build()
+    .unwrap();
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, take_profit_buy)).await.unwrap();
-        resp_rx.await.unwrap()
-    };
+    let resp = proc_router
+        .place_order(
+            btc_usd.clone(),
+            user2.user_id.clone(),
+            OrderUuid(uuid::Uuid::new_v4()),
+            take_profit_buy,
+        )
+        .await
+        .map(|_| MsgOut::OrderPlaced);
     assert_eq!(resp, Ok(MsgOut::OrderPlaced));
 
     // Verify USD was reserved (0.1 × 45000 = 4500 USD)
-    let usd_balance_user2 = user2.balance(&pg_pool, user2.usd_account_id).await;
+    let usd_balance_user2 = user2.compute_balance(&pg_pool, user2.usd_account_id).await;
 
     // Should have 100,000 - 4,500 = 95,500 USD remaining
     assert_eq!(
@@ -94,59 +88,55 @@ async fn test_take_profit_buy_triggers_on_price_fall(pg_pool: sqlx::PgPool) {
 
     // User 2 places a small market buy to establish price at 50k (matches user 1's sell)
     // Note: User 2 already has 4500 USD reserved, so has 95,500 USD available
-    let market_buy = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user2.user_id.clone(),
-        order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-        order_details: OrderTicket::builder(
-            OrderType::Market,
-            OrderSide::Buy,
-            Price {
-                prefix: None,
-                amount: dec!(50000),
-                is_percentage: false,
-            },
-        )
-        .quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
-        .display_quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
-        .volume(dec!(0.01))
-        .build()
-        .unwrap(),
-    });
+    let market_buy = OrderTicket::builder(
+        OrderType::Market,
+        OrderSide::Buy,
+        Price {
+            prefix: None,
+            amount: dec!(50000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.01)).unwrap())
+    .build()
+    .unwrap();
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, market_buy)).await.unwrap();
-        resp_rx.await.unwrap()
-    };
+    let resp = proc_router
+        .place_order(
+            btc_usd.clone(),
+            user2.user_id.clone(),
+            OrderUuid(uuid::Uuid::new_v4()),
+            market_buy,
+        )
+        .await
+        .map(|_| MsgOut::OrderPlaced);
     assert_eq!(resp, Ok(MsgOut::OrderPlaced));
 
     // User 1 places a limit sell at 45k to push price down and trigger the take-profit
-    let trigger_sell = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user1.user_id.clone(),
-        order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-        order_details: OrderTicket::builder(
-            OrderType::Limit,
-            OrderSide::Sell,
-            Price {
-                prefix: None,
-                amount: dec!(45000),
-                is_percentage: false,
-            },
-        )
-        .quantity(NonZeroDecimal::new(dec!(0.2)).unwrap())
-        .display_quantity(NonZeroDecimal::new(dec!(0.2)).unwrap())
-        .volume(dec!(0.2))
-        .build()
-        .unwrap(),
-    });
+    let trigger_sell = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Sell,
+        Price {
+            prefix: None,
+            amount: dec!(45000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.2)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.2)).unwrap())
+    .build()
+    .unwrap();
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, trigger_sell)).await.unwrap();
-        resp_rx.await.unwrap()
-    };
+    let resp = proc_router
+        .place_order(
+            btc_usd,
+            user1.user_id.clone(),
+            OrderUuid(uuid::Uuid::new_v4()),
+            trigger_sell,
+        )
+        .await
+        .map(|_| MsgOut::OrderPlaced);
     assert!(
         matches!(resp, Ok(MsgOut::OrderPlaced)),
         "Trigger sell should execute and trigger take-profit"

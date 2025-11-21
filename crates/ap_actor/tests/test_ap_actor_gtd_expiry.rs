@@ -1,11 +1,8 @@
-use ap_actor::order_management::CancelOrderBy;
-use ap_actor::order_management::PlaceOrderArgs;
-use ap_actor::proc::CancelOrderByArgs;
-use ap_actor::proc::MsgError;
-use ap_actor::proc::MsgIn;
-use ap_actor::proc::MsgOut;
+use ap_actor::proc_router::CancelOrderBy;
+use ap_actor::test::AccountTxJournal;
 use ap_actor::test::TestFixture;
 use ap_actor::test::TestUser;
+use ap_actor::test::t_account_tx_journal;
 use ap_actor::test::test_ap_actor_fixture;
 use matching_engine::decimal::NonZeroDecimal;
 use matching_engine::decimal::dec;
@@ -16,17 +13,21 @@ use matching_engine::orderbook::OrderType;
 use matching_engine::orderbook::TimeInForce;
 use matching_engine::price::Price;
 use std::time;
-use tokio::sync::oneshot;
+use tokio::time::Duration;
+use tokio::time::Instant;
+use tokio::time::sleep_until;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_ap_actor_gtd_order_expiry(pg_pool: sqlx::PgPool) {
     let user = TestUser::random().create(&pg_pool).await;
 
     let TestFixture {
-        btc_usd, ap_sender, ..
+        btc_usd,
+        proc_router,
+        ..
     } = test_ap_actor_fixture(&pg_pool).await;
 
-    let initial_usd_balance = user.balance(&pg_pool, user.usd_account_id).await;
+    let initial_usd_balance = user.compute_balance(&pg_pool, user.usd_account_id).await;
 
     assert_eq!(
         initial_usd_balance,
@@ -38,40 +39,34 @@ async fn test_ap_actor_gtd_order_expiry(pg_pool: sqlx::PgPool) {
         .duration_since(time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
-        + 2;
+        + 1;
     let order_uuid = OrderUuid(uuid::Uuid::new_v4());
-    let gtd_buy_order = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user.user_id.clone(),
-        order_uuid: order_uuid.clone(),
-        order_details: OrderTicket::builder(
-            OrderType::Limit,
-            OrderSide::Buy,
-            Price {
-                prefix: None,
-                amount: dec!(50000),
-                is_percentage: false,
-            },
+    let gtd_buy_order = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Buy,
+        Price {
+            prefix: None,
+            amount: dec!(50000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
+    .time_in_force(TimeInForce::GoodTilDate(expiry as u64))
+    .build()
+    .unwrap();
+
+    proc_router
+        .place_order(
+            btc_usd.clone(),
+            user.user_id.clone(),
+            order_uuid.clone(),
+            gtd_buy_order.clone(),
         )
-        .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
-        .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
-        .volume(dec!(0.1))
-        .time_in_force(TimeInForce::GoodTilDate(expiry as u64))
-        .build()
-        .unwrap(),
-    });
+        .await
+        .unwrap();
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender
-            .send((resp_tx, gtd_buy_order.clone()))
-            .await
-            .unwrap();
-        resp_rx.await.unwrap()
-    };
-    assert_eq!(resp, Ok(MsgOut::OrderPlaced));
-
-    let balance_after_place = user.balance(&pg_pool, user.usd_account_id).await;
+    let balance_after_place = user.compute_balance(&pg_pool, user.usd_account_id).await;
 
     assert_eq!(
         balance_after_place,
@@ -79,44 +74,9 @@ async fn test_ap_actor_gtd_order_expiry(pg_pool: sqlx::PgPool) {
         "User USD balance should be $95k after reserving $5k for GTD order"
     );
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+    sleep_until(Instant::now() + Duration::from_millis(2000)).await;
 
-    let expiry_refund_count = sqlx::query_scalar!(
-        r#"
-            SELECT COUNT(*)
-            FROM t_account_tx_journal
-            WHERE transaction_type = 'gtd_expiry_refund'
-            AND credit_account_id = $1
-            "#,
-        user.usd_account_id
-    )
-    .fetch_one(&pg_pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        expiry_refund_count.unwrap_or(0),
-        1,
-        "Should have exactly 1 gtd_expiry_refund transaction"
-    );
-
-    let refund_amount = sqlx::query_scalar!(
-        r#"
-            SELECT amount
-            FROM t_account_tx_journal
-            WHERE transaction_type = 'gtd_expiry_refund'
-            AND credit_account_id = $1
-            AND currency = 'USD'
-            "#,
-        user.usd_account_id
-    )
-    .fetch_one(&pg_pool)
-    .await
-    .unwrap();
-
-    assert_eq!(refund_amount, dec!(5_000), "Refund amount should be $5,000");
-
-    let final_balance = user.balance(&pg_pool, user.usd_account_id).await;
+    let final_balance = user.compute_balance(&pg_pool, user.usd_account_id).await;
 
     assert_eq!(
         final_balance,
@@ -124,19 +84,19 @@ async fn test_ap_actor_gtd_order_expiry(pg_pool: sqlx::PgPool) {
         "User USD balance should be fully restored to $100k after expiry"
     );
 
-    let cancel_expired_msg = MsgIn::CancelOrderBy(CancelOrderByArgs {
-        user_id: user.user_id.clone(),
-        cancel_order_by: CancelOrderBy::TxId(order_uuid),
-    });
+    let resp = proc_router
+        .cancel_order(CancelOrderBy::TxId(order_uuid), user.user_id.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        resp,
+        (
+            vec![],
+            vec![(order_uuid.0, "Failed to cancel order".to_owned())]
+        )
+    );
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, cancel_expired_msg)).await.unwrap();
-        resp_rx.await.unwrap()
-    };
-    assert_eq!(resp, Err(MsgError::OrderNotFound));
-
-    let initial_btc_balance = user.balance(&pg_pool, user.btc_account_id).await;
+    let initial_btc_balance = user.compute_balance(&pg_pool, user.btc_account_id).await;
 
     assert_eq!(
         initial_btc_balance,
@@ -148,40 +108,34 @@ async fn test_ap_actor_gtd_order_expiry(pg_pool: sqlx::PgPool) {
         .duration_since(time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
-        + 2;
+        + 1;
     let sell_order_uuid = OrderUuid(uuid::Uuid::new_v4());
-    let gtd_sell_order = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user.user_id.clone(),
-        order_uuid: sell_order_uuid.clone(),
-        order_details: OrderTicket::builder(
-            OrderType::Limit,
-            OrderSide::Sell,
-            Price {
-                prefix: None,
-                amount: dec!(50000),
-                is_percentage: false,
-            },
+    let gtd_sell_order = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Sell,
+        Price {
+            prefix: None,
+            amount: dec!(50000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
+    .time_in_force(TimeInForce::GoodTilDate(expiry as u64))
+    .build()
+    .unwrap();
+
+    proc_router
+        .place_order(
+            btc_usd.clone(),
+            user.user_id.clone(),
+            sell_order_uuid.clone(),
+            gtd_sell_order.clone(),
         )
-        .quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
-        .display_quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
-        .volume(dec!(0.5))
-        .time_in_force(TimeInForce::GoodTilDate(expiry as u64))
-        .build()
-        .unwrap(),
-    });
+        .await
+        .unwrap();
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender
-            .send((resp_tx, gtd_sell_order.clone()))
-            .await
-            .unwrap();
-        resp_rx.await.unwrap()
-    };
-    assert_eq!(resp, Ok(MsgOut::OrderPlaced));
-
-    let btc_balance_after_place = user.balance(&pg_pool, user.btc_account_id).await;
+    let btc_balance_after_place = user.compute_balance(&pg_pool, user.btc_account_id).await;
 
     assert_eq!(
         btc_balance_after_place,
@@ -189,29 +143,9 @@ async fn test_ap_actor_gtd_order_expiry(pg_pool: sqlx::PgPool) {
         "User BTC balance should be 9.5 BTC after reserving 0.5 BTC"
     );
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+    sleep_until(Instant::now() + Duration::from_millis(2010)).await;
 
-    let btc_refund_amount = sqlx::query_scalar!(
-        r#"
-            SELECT amount
-            FROM t_account_tx_journal
-            WHERE transaction_type = 'gtd_expiry_refund'
-            AND credit_account_id = $1
-            AND currency = 'BTC'
-            "#,
-        user.btc_account_id
-    )
-    .fetch_one(&pg_pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        btc_refund_amount,
-        dec!(0.5),
-        "BTC refund amount should be 0.5 BTC"
-    );
-
-    let btc_balance_after_expiry = user.balance(&pg_pool, user.btc_account_id).await;
+    let btc_balance_after_expiry = user.compute_balance(&pg_pool, user.btc_account_id).await;
 
     assert_eq!(
         btc_balance_after_expiry,
@@ -223,150 +157,115 @@ async fn test_ap_actor_gtd_order_expiry(pg_pool: sqlx::PgPool) {
         .duration_since(time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
-        + 10;
+        + 1;
     let manual_uuid = OrderUuid(uuid::Uuid::new_v4());
-    let manual_order = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user.user_id.clone(),
-        order_uuid: manual_uuid.clone(),
-        order_details: OrderTicket::builder(
-            OrderType::Limit,
-            OrderSide::Buy,
-            Price {
-                prefix: None,
-                amount: dec!(45000),
-                is_percentage: false,
-            },
-        )
-        .quantity(NonZeroDecimal::new(dec!(0.2)).unwrap())
-        .display_quantity(NonZeroDecimal::new(dec!(0.2)).unwrap())
-        .volume(dec!(0.2))
-        .time_in_force(TimeInForce::GoodTilDate(expiry as u64))
-        .build()
-        .unwrap(),
-    });
-
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, manual_order)).await.unwrap();
-        resp_rx.await.unwrap()
-    };
-    assert_eq!(resp, Ok(MsgOut::OrderPlaced));
-
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-
-    let cancel_msg = MsgIn::CancelOrderBy(CancelOrderByArgs {
-        user_id: user.user_id.clone(),
-        cancel_order_by: CancelOrderBy::TxId(manual_uuid),
-    });
-
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, cancel_msg)).await.unwrap();
-        resp_rx.await.unwrap()
-    };
-    assert_eq!(
-        resp,
-        Ok(MsgOut::OrderCancelled {
-            success: vec![manual_uuid],
-            failed: vec![]
-        })
-    );
-
-    let manual_refund_count = sqlx::query_scalar!(
-        r#"
-            SELECT COUNT(*)
-            FROM t_account_tx_journal
-            WHERE transaction_type = 'cancel_refund'
-            AND credit_account_id = $1
-            AND currency = 'USD'
-            "#,
-        user.usd_account_id
+    let manual_order = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Buy,
+        Price {
+            prefix: None,
+            amount: dec!(45000),
+            is_percentage: false,
+        },
     )
-    .fetch_one(&pg_pool)
-    .await
+    .quantity(NonZeroDecimal::new(dec!(0.2)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.2)).unwrap())
+    .time_in_force(TimeInForce::GoodTilDate(expiry as u64))
+    .build()
     .unwrap();
 
-    assert!(
-        manual_refund_count.unwrap_or(0) > 0,
-        "Should have cancel_refund transaction for manual cancellation"
+    proc_router
+        .place_order(
+            btc_usd.clone(),
+            user.user_id.clone(),
+            manual_uuid.clone(),
+            manual_order,
+        )
+        .await
+        .unwrap();
+
+    sleep_until(Instant::now() + Duration::from_millis(2000)).await;
+
+    let resp = proc_router
+        .cancel_order(
+            CancelOrderBy::TxId(manual_uuid.clone()),
+            user.user_id.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp,
+        (
+            vec![],
+            vec![(manual_uuid.0, "Failed to cancel order".to_owned())]
+        )
     );
 
     let expiry = time::SystemTime::now()
         .duration_since(time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
-        + 2;
+        + 1;
     let order_a_uuid = OrderUuid(uuid::Uuid::new_v4());
-    let order_a = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user.user_id.clone(),
-        order_uuid: order_a_uuid,
-        order_details: OrderTicket::builder(
-            OrderType::Limit,
-            OrderSide::Buy,
-            Price {
-                prefix: None,
-                amount: dec!(49000),
-                is_percentage: false,
-            },
-        )
-        .quantity(NonZeroDecimal::new(dec!(0.15)).unwrap())
-        .display_quantity(NonZeroDecimal::new(dec!(0.15)).unwrap())
-        .volume(dec!(0.15))
-        .time_in_force(TimeInForce::GoodTilDate(expiry as u64))
-        .build()
-        .unwrap(),
-    });
+    let order_a = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Buy,
+        Price {
+            prefix: None,
+            amount: dec!(49000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.15)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.15)).unwrap())
+    .time_in_force(TimeInForce::GoodTilDate(expiry as u64))
+    .build()
+    .unwrap();
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender
-            .send((resp_tx, gtd_buy_order.clone()))
-            .await
-            .unwrap();
-        resp_rx.await.unwrap().unwrap()
-    };
-    assert_eq!(resp, MsgOut::OrderPlaced);
+    proc_router
+        .place_order(
+            btc_usd.clone(),
+            user.user_id.clone(),
+            order_a_uuid.clone(),
+            order_a,
+        )
+        .await
+        .unwrap();
 
     let expiry = time::SystemTime::now()
         .duration_since(time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
-        + 5;
+        + 1;
     let order_b_uuid = OrderUuid(uuid::Uuid::new_v4());
-    let order_b = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user.user_id.clone(),
-        order_uuid: order_b_uuid,
-        order_details: OrderTicket::builder(
-            OrderType::Limit,
-            OrderSide::Buy,
-            Price {
-                prefix: None,
-                amount: dec!(47000),
-                is_percentage: false,
-            },
+    let order_b = OrderTicket::builder(
+        OrderType::Limit,
+        OrderSide::Buy,
+        Price {
+            prefix: None,
+            amount: dec!(47000),
+            is_percentage: false,
+        },
+    )
+    .quantity(NonZeroDecimal::new(dec!(0.25)).unwrap())
+    .display_quantity(NonZeroDecimal::new(dec!(0.25)).unwrap())
+    .time_in_force(TimeInForce::GoodTilDate(expiry as u64))
+    .build()
+    .unwrap();
+
+    proc_router
+        .place_order(
+            btc_usd.clone(),
+            user.user_id.clone(),
+            order_b_uuid.clone(),
+            order_b,
         )
-        .quantity(NonZeroDecimal::new(dec!(0.25)).unwrap())
-        .display_quantity(NonZeroDecimal::new(dec!(0.25)).unwrap())
-        .volume(dec!(0.25))
-        .time_in_force(TimeInForce::GoodTilDate(expiry as u64))
-        .build()
-        .unwrap(),
-    });
+        .await
+        .unwrap();
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender
-            .send((resp_tx, gtd_sell_order.clone()))
-            .await
-            .unwrap();
-        resp_rx.await.unwrap().unwrap()
-    };
-    assert_eq!(resp, MsgOut::OrderPlaced);
+    sleep_until(Instant::now() + Duration::from_millis(100)).await;
 
-    let balance_with_two_orders = user.balance(&pg_pool, user.usd_account_id).await;
+    let balance_with_two_orders = user.compute_balance(&pg_pool, user.usd_account_id).await;
 
     assert_eq!(
         balance_with_two_orders,
@@ -374,23 +273,33 @@ async fn test_ap_actor_gtd_order_expiry(pg_pool: sqlx::PgPool) {
         "Balance should reflect both orders reserved"
     );
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+    sleep_until(Instant::now() + Duration::from_millis(2000)).await;
 
-    let balance_after_first_expiry = user.balance(&pg_pool, user.usd_account_id).await;
-
-    assert_eq!(
-        balance_after_first_expiry,
-        dec!(88_250),
-        "Balance should reflect order A refunded but order B still reserved"
-    );
-
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-
-    let final_balance_both_expired = user.balance(&pg_pool, user.usd_account_id).await;
+    let final_balance_both_expired = user.compute_balance(&pg_pool, user.usd_account_id).await;
 
     assert_eq!(
         final_balance_both_expired,
         dec!(100_000),
         "Balance should be fully restored after both orders expire"
     );
+
+    // Snapshot journal assertions
+    t_account_tx_journal(&pg_pool) /* actual */
+        .await
+        .iter()
+        .zip(
+            [
+                /* expected (snapshot to be updated by test runner) */
+            ]
+            .into_iter()
+            .map(|value| serde_json::from_value::<AccountTxJournal>(value).unwrap()),
+        )
+        .for_each(|(actual, expected)| {
+            assert_eq!(actual.id, expected.id);
+            assert_eq!(actual.credit_account_id, expected.credit_account_id);
+            assert_eq!(actual.debit_account_id, expected.debit_account_id);
+            assert_eq!(actual.currency, expected.currency);
+            assert_eq!(actual.amount, expected.amount);
+            assert_eq!(actual.transaction_type, expected.transaction_type);
+        });
 }

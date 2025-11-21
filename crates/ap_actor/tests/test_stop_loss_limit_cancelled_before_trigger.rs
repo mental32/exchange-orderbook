@@ -1,10 +1,4 @@
-use tokio::sync::oneshot;
-
-use ap_actor::order_management::CancelOrderBy;
-use ap_actor::order_management::PlaceOrderArgs;
-use ap_actor::proc::CancelOrderByArgs;
-use ap_actor::proc::MsgIn;
-use ap_actor::proc::MsgOut;
+use ap_actor::proc_router::CancelOrderBy;
 use ap_actor::test::TestFixture;
 use ap_actor::test::TestUser;
 use ap_actor::test::test_ap_actor_fixture;
@@ -15,16 +9,21 @@ use matching_engine::order_uuid::OrderUuid;
 use matching_engine::orderbook::OrderSide;
 use matching_engine::orderbook::OrderType;
 use matching_engine::price::Price;
+use tokio::time::Duration;
+use tokio::time::Instant;
+use tokio::time::sleep_until;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_stop_loss_limit_cancelled_before_trigger(pg_pool: sqlx::PgPool) {
     let user = TestUser::random().create(&pg_pool).await;
 
     let TestFixture {
-        btc_usd, ap_sender, ..
+        btc_usd,
+        proc_router,
+        ..
     } = test_ap_actor_fixture(&pg_pool).await;
 
-    let initial_usd = user.balance(&pg_pool, user.usd_account_id).await;
+    let initial_usd = user.compute_balance(&pg_pool, user.usd_account_id).await;
 
     assert_eq!(initial_usd, dec!(100_000), "Initial USD should be $100k");
 
@@ -41,7 +40,6 @@ async fn test_stop_loss_limit_cancelled_before_trigger(pg_pool: sqlx::PgPool) {
     )
     .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
     .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
-    .volume(dec!(0.1))
     .secondary_price(Price {
         prefix: None,
         amount: dec!(53000),
@@ -50,29 +48,18 @@ async fn test_stop_loss_limit_cancelled_before_trigger(pg_pool: sqlx::PgPool) {
     .build()
     .unwrap();
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender
-            .send((
-                resp_tx,
-                MsgIn::PlaceOrder(PlaceOrderArgs {
-                    base_quote: btc_usd.clone(),
-                    user_id: user.user_id.clone(),
-                    order_uuid,
-                    order_details: stop_loss_limit_buy_order_details,
-                }),
-            ))
-            .await
-            .unwrap();
-        resp_rx.await.unwrap()
-    };
-    assert!(
-        matches!(resp, Ok(MsgOut::OrderPlaced)),
-        "StopLossLimit buy should be placed"
-    );
+    proc_router
+        .place_order(
+            btc_usd.clone(),
+            user.user_id.clone(),
+            order_uuid,
+            stop_loss_limit_buy_order_details,
+        )
+        .await
+        .unwrap();
 
     // Verify USD reserved at trigger price (0.1 BTC * $52,000 = $5,200)
-    let usd_after_place = user.balance(&pg_pool, user.usd_account_id).await;
+    let usd_after_place = user.compute_balance(&pg_pool, user.usd_account_id).await;
 
     assert_eq!(
         usd_after_place,
@@ -81,27 +68,17 @@ async fn test_stop_loss_limit_cancelled_before_trigger(pg_pool: sqlx::PgPool) {
     );
 
     // Cancel the order before it triggers
-    let cancel_msg = MsgIn::CancelOrderBy(CancelOrderByArgs {
-        user_id: user.user_id.clone(),
-        cancel_order_by: CancelOrderBy::TxId(order_uuid),
-    });
-
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, cancel_msg)).await.unwrap();
-        resp_rx.await.unwrap()
-    };
-    assert!(
-        matches!(resp, Ok(MsgOut::OrderCancelled { .. })),
-        "Order should be cancelled successfully, got: {:?}",
-        resp
-    );
+    let resp = proc_router
+        .cancel_order(CancelOrderBy::TxId(order_uuid), user.user_id.clone())
+        .await
+        .unwrap();
+    assert_eq!(resp, (vec![order_uuid.0], vec![]));
 
     // Give cancellation some time to process
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    sleep_until(Instant::now() + Duration::from_millis(100)).await;
 
     // Verify funds were refunded
-    let usd_after_cancel = user.balance(&pg_pool, user.usd_account_id).await;
+    let usd_after_cancel = user.compute_balance(&pg_pool, user.usd_account_id).await;
 
     assert_eq!(
         usd_after_cancel,

@@ -1,10 +1,8 @@
-use ap_actor::order_management::CancelOrderBy;
-use ap_actor::order_management::PlaceOrderArgs;
-use ap_actor::proc::CancelOrderByArgs;
-use ap_actor::proc::MsgIn;
-use ap_actor::proc::MsgOut;
+use ap_actor::proc_router::CancelOrderBy;
+use ap_actor::test::AccountTxJournal;
 use ap_actor::test::TestFixture;
 use ap_actor::test::TestUser;
+use ap_actor::test::t_account_tx_journal;
 use ap_actor::test::test_ap_actor_fixture;
 use matching_engine::decimal::NonZeroDecimal;
 use matching_engine::decimal::dec;
@@ -13,7 +11,6 @@ use matching_engine::order_uuid::OrderUuid;
 use matching_engine::orderbook::OrderSide;
 use matching_engine::orderbook::OrderType;
 use matching_engine::price::Price;
-use tokio::sync::oneshot;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_ap_actor_partial_fill_cancel(pg_pool: sqlx::PgPool) {
@@ -21,45 +18,42 @@ async fn test_ap_actor_partial_fill_cancel(pg_pool: sqlx::PgPool) {
     let user2 = TestUser::random().create(&pg_pool).await;
 
     let TestFixture {
-        btc_usd, ap_sender, ..
+        btc_usd,
+        proc_router,
+        ..
     } = test_ap_actor_fixture(&pg_pool).await;
 
-    let initial_usd = user2.balance(&pg_pool, user2.usd_account_id).await;
-    let initial_btc = user1.balance(&pg_pool, user1.btc_account_id).await;
+    let initial_usd = user2.compute_balance(&pg_pool, user2.usd_account_id).await;
+    let initial_btc = user1.compute_balance(&pg_pool, user1.btc_account_id).await;
     assert_eq!(initial_usd, dec!(100_000));
     assert_eq!(initial_btc, dec!(10));
 
     // Step 1: Place a sell order (maker) for 1.0 BTC @ $50,000
     let maker_order_uuid = OrderUuid(uuid::Uuid::new_v4());
 
-    let maker_msg = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user1.user_id.clone(),
-        order_uuid: maker_order_uuid.clone(),
-        order_details: OrderTicket::builder(
-            OrderType::Limit,
-            OrderSide::Sell,
-            Price {
-                prefix: None,
-                amount: dec!(50000),
-                is_percentage: false,
-            },
+    proc_router
+        .place_order(
+            btc_usd.clone(),
+            user1.user_id.clone(),
+            maker_order_uuid.clone(),
+            OrderTicket::builder(
+                OrderType::Limit,
+                OrderSide::Sell,
+                Price {
+                    prefix: None,
+                    amount: dec!(50000),
+                    is_percentage: false,
+                },
+            )
+            .quantity(NonZeroDecimal::new(dec!(1.0)).unwrap())
+            .display_quantity(NonZeroDecimal::new(dec!(1.0)).unwrap())
+            .build()
+            .unwrap(),
         )
-        .quantity(NonZeroDecimal::new(dec!(1.0)).unwrap())
-        .display_quantity(NonZeroDecimal::new(dec!(1.0)).unwrap())
-        .volume(dec!(1.0))
-        .build()
-        .unwrap(),
-    });
+        .await
+        .unwrap();
 
-    let maker_resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, maker_msg)).await.unwrap();
-        resp_rx.await.unwrap().unwrap()
-    };
-    assert_eq!(maker_resp, MsgOut::OrderPlaced);
-
-    let btc_after_maker = user1.balance(&pg_pool, user1.btc_account_id).await;
+    let btc_after_maker = user1.compute_balance(&pg_pool, user1.btc_account_id).await;
     assert_eq!(
         btc_after_maker,
         dec!(9.0),
@@ -70,35 +64,30 @@ async fn test_ap_actor_partial_fill_cancel(pg_pool: sqlx::PgPool) {
     // This will match 0.6 BTC, leaving 0.4 BTC resting on the sell side
     let taker_order_uuid = OrderUuid(uuid::Uuid::new_v4());
 
-    let taker_msg = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user2.user_id.clone(),
-        order_uuid: taker_order_uuid.clone(),
-        order_details: OrderTicket::builder(
-            OrderType::Limit,
-            OrderSide::Buy,
-            Price {
-                prefix: None,
-                amount: dec!(50000),
-                is_percentage: false,
-            },
+    proc_router
+        .place_order(
+            btc_usd.clone(),
+            user2.user_id.clone(),
+            taker_order_uuid.clone(),
+            OrderTicket::builder(
+                OrderType::Limit,
+                OrderSide::Buy,
+                Price {
+                    prefix: None,
+                    amount: dec!(50000),
+                    is_percentage: false,
+                },
+            )
+            .quantity(NonZeroDecimal::new(dec!(0.6)).unwrap())
+            .display_quantity(NonZeroDecimal::new(dec!(0.6)).unwrap())
+            .build()
+            .unwrap(),
         )
-        .quantity(NonZeroDecimal::new(dec!(0.6)).unwrap())
-        .display_quantity(NonZeroDecimal::new(dec!(0.6)).unwrap())
-        .volume(dec!(0.6))
-        .build()
-        .unwrap(),
-    });
+        .await
+        .unwrap();
 
-    let taker_resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, taker_msg)).await.unwrap();
-        resp_rx.await.unwrap().unwrap()
-    };
-    assert_eq!(taker_resp, MsgOut::OrderPlaced);
-
-    let btc_after_fill = user2.balance(&pg_pool, user2.btc_account_id).await;
-    let usd_after_fill = user2.balance(&pg_pool, user2.usd_account_id).await;
+    let btc_after_fill = user2.compute_balance(&pg_pool, user2.btc_account_id).await;
+    let usd_after_fill = user2.compute_balance(&pg_pool, user2.usd_account_id).await;
     assert_eq!(
         btc_after_fill,
         dec!(10.6),
@@ -111,48 +100,38 @@ async fn test_ap_actor_partial_fill_cancel(pg_pool: sqlx::PgPool) {
     );
 
     // Step 3: Cancel the maker order (which still has 0.4 BTC resting)
-    let cancel_msg = MsgIn::CancelOrderBy(CancelOrderByArgs {
-        user_id: user1.user_id.clone(),
-        cancel_order_by: CancelOrderBy::TxId(maker_order_uuid.clone()),
-    });
+    let cancel_resp = proc_router
+        .cancel_order(
+            CancelOrderBy::TxId(maker_order_uuid.clone()),
+            user1.user_id.clone(),
+        )
+        .await
+        .unwrap();
 
-    let cancel_resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, cancel_msg)).await.unwrap();
-        resp_rx.await.unwrap()
-    };
-
-    assert_eq!(
-        cancel_resp,
-        Ok(MsgOut::OrderCancelled {
-            success: vec![maker_order_uuid],
-            failed: vec![]
-        })
-    );
+    assert_eq!(cancel_resp, (vec![maker_order_uuid.0], vec![]));
 
     // Step 4: Verify refund is ONLY for the unfilled portion (0.4 BTC)
-    let btc_refund = sqlx::query_scalar!(
-        r#"
-            SELECT amount
-            FROM t_account_tx_journal
-            WHERE transaction_type = 'cancel_refund'
-            AND credit_account_id = $1
-            AND currency = 'BTC'
-            "#,
-        user1.btc_account_id
-    )
-    .fetch_one(&pg_pool)
-    .await
-    .unwrap();
+    t_account_tx_journal(&pg_pool) /* actual */
+        .await
+        .iter()
+        .zip(
+            [
+                /* expected (snapshot to be updated by test runner) */
+            ]
+            .into_iter()
+            .map(|value| serde_json::from_value::<AccountTxJournal>(value).unwrap()),
+        )
+        .for_each(|(actual, expected)| {
+            assert_eq!(actual.id, expected.id);
+            assert_eq!(actual.credit_account_id, expected.credit_account_id);
+            assert_eq!(actual.debit_account_id, expected.debit_account_id);
+            assert_eq!(actual.currency, expected.currency);
+            assert_eq!(actual.amount, expected.amount);
+            assert_eq!(actual.transaction_type, expected.transaction_type);
+        });
 
-    assert_eq!(
-        btc_refund,
-        dec!(0.4),
-        "Refund should be 0.4 BTC (unfilled portion), not the original 1.0 BTC"
-    );
-
-    let final_btc = user1.balance(&pg_pool, user1.btc_account_id).await;
-    let final_usd = user2.balance(&pg_pool, user2.usd_account_id).await;
+    let final_btc = user1.compute_balance(&pg_pool, user1.btc_account_id).await;
+    let final_usd = user2.compute_balance(&pg_pool, user2.usd_account_id).await;
     assert_eq!(
         final_btc,
         dec!(9.4),

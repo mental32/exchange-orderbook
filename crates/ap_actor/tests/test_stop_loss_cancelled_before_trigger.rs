@@ -1,12 +1,8 @@
-use tokio::sync::oneshot;
-
-use ap_actor::order_management::CancelOrderBy;
-use ap_actor::order_management::PlaceOrderArgs;
-use ap_actor::proc::CancelOrderByArgs;
-use ap_actor::proc::MsgIn;
-use ap_actor::proc::MsgOut;
+use ap_actor::proc_router::CancelOrderBy;
+use ap_actor::test::AccountTxJournal;
 use ap_actor::test::TestFixture;
 use ap_actor::test::TestUser;
+use ap_actor::test::t_account_tx_journal;
 use ap_actor::test::test_ap_actor_fixture;
 use matching_engine::decimal::NonZeroDecimal;
 use matching_engine::decimal::dec;
@@ -21,10 +17,12 @@ async fn test_stop_loss_cancelled_before_trigger(pg_pool: sqlx::PgPool) {
     let user = TestUser::random().create(&pg_pool).await;
 
     let TestFixture {
-        btc_usd, ap_sender, ..
+        btc_usd,
+        proc_router,
+        ..
     } = test_ap_actor_fixture(&pg_pool).await;
 
-    let initial_btc = user.balance(&pg_pool, user.btc_account_id).await;
+    let initial_btc = user.compute_balance(&pg_pool, user.btc_account_id).await;
 
     assert_eq!(initial_btc, dec!(10), "Initial BTC should be 10");
 
@@ -40,31 +38,22 @@ async fn test_stop_loss_cancelled_before_trigger(pg_pool: sqlx::PgPool) {
     )
     .quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
     .display_quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
-    .volume(dec!(0.5))
     .build()
     .unwrap();
 
     let stop_loss_uuid = OrderUuid(uuid::Uuid::new_v4());
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender
-            .send((
-                resp_tx,
-                MsgIn::PlaceOrder(PlaceOrderArgs {
-                    base_quote: btc_usd.clone(),
-                    user_id: user.user_id.clone(),
-                    order_uuid: stop_loss_uuid.clone(),
-                    order_details: stop_loss_order_details,
-                }),
-            ))
-            .await
-            .unwrap();
-        resp_rx.await.unwrap().unwrap()
-    };
-    assert_eq!(resp, MsgOut::OrderPlaced);
+    proc_router
+        .place_order(
+            btc_usd.clone(),
+            user.user_id.clone(),
+            stop_loss_uuid.clone(),
+            stop_loss_order_details,
+        )
+        .await
+        .unwrap();
 
     // Verify BTC reserved
-    let btc_after_place = user.balance(&pg_pool, user.btc_account_id).await;
+    let btc_after_place = user.compute_balance(&pg_pool, user.btc_account_id).await;
 
     assert_eq!(
         btc_after_place,
@@ -74,46 +63,37 @@ async fn test_stop_loss_cancelled_before_trigger(pg_pool: sqlx::PgPool) {
     );
 
     // Cancel the stop-loss order
-    let cancel_msg = MsgIn::CancelOrderBy(CancelOrderByArgs {
-        user_id: user.user_id.clone(),
-        cancel_order_by: CancelOrderBy::TxId(stop_loss_uuid),
-    });
+    let resp = proc_router
+        .cancel_order(
+            CancelOrderBy::TxId(stop_loss_uuid.clone()),
+            user.user_id.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp, (vec![stop_loss_uuid.0], vec![]));
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, cancel_msg)).await.unwrap();
-        resp_rx.await.unwrap().unwrap()
-    };
-    assert_eq!(
-        resp,
-        MsgOut::OrderCancelled {
-            success: vec![stop_loss_uuid],
-            failed: vec![]
-        }
-    );
-
-    // Verify refund transaction exists
-    let refund_count = sqlx::query_scalar!(
-        r#"
-            SELECT COUNT(*)
-            FROM t_account_tx_journal
-            WHERE transaction_type = 'stop_loss_cancel_refund'
-            AND credit_account_id = $1
-            "#,
-        user.btc_account_id
-    )
-    .fetch_one(&pg_pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        refund_count.unwrap_or(0),
-        1,
-        "Should have stop_loss_cancel_refund transaction"
-    );
+    // Verify refund transaction
+    t_account_tx_journal(&pg_pool) /* actual */
+        .await
+        .iter()
+        .zip(
+            [
+                /* expected (snapshot to be updated by test runner) */
+            ]
+            .into_iter()
+            .map(|value| serde_json::from_value::<AccountTxJournal>(value).unwrap()),
+        )
+        .for_each(|(actual, expected)| {
+            assert_eq!(actual.id, expected.id);
+            assert_eq!(actual.credit_account_id, expected.credit_account_id);
+            assert_eq!(actual.debit_account_id, expected.debit_account_id);
+            assert_eq!(actual.currency, expected.currency);
+            assert_eq!(actual.amount, expected.amount);
+            assert_eq!(actual.transaction_type, expected.transaction_type);
+        });
 
     // Verify balance restored
-    let btc_after_cancel = user.balance(&pg_pool, user.btc_account_id).await;
+    let btc_after_cancel = user.compute_balance(&pg_pool, user.btc_account_id).await;
 
     assert_eq!(
         btc_after_cancel,

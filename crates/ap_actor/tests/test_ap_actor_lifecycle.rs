@@ -1,7 +1,4 @@
-use ap_actor::order_management::PlaceOrderArgs;
 use ap_actor::proc::MsgError;
-use ap_actor::proc::MsgIn;
-use ap_actor::proc::MsgOut;
 use ap_actor::proc::ProcStatus;
 use ap_actor::test::TestFixture;
 use ap_actor::test::TestUser;
@@ -13,32 +10,22 @@ use matching_engine::order_uuid::OrderUuid;
 use matching_engine::orderbook::OrderSide;
 use matching_engine::orderbook::OrderType;
 use matching_engine::price::Price;
-use tokio::sync::oneshot;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_ap_actor_lifecycle(pg_pool: sqlx::PgPool) {
     let user = TestUser::random().create(&pg_pool).await;
 
     let TestFixture {
-        ap_sender: actor_tx,
+        proc_router,
         btc_usd,
         ..
     } = test_ap_actor_fixture(&pg_pool).await;
 
     // Transition to maintenance mode and verify acknowledgement
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        actor_tx
-            .send((resp_tx, MsgIn::SetStatus(ProcStatus::Maintenance)))
-            .await
-            .unwrap();
-        resp_rx.await.unwrap()
-    };
-    assert_eq!(
-        resp.unwrap(),
-        MsgOut::StatusChanged(ProcStatus::Maintenance),
-        "Setting status to Maintenance should yield StatusChanged(Maintenance)"
-    );
+    let resp = proc_router
+        .set_status(btc_usd.clone(), ProcStatus::Maintenance)
+        .await;
+    assert_eq!(resp.ok(), Some(ProcStatus::Maintenance));
 
     // Orders should be rejected while the processor is in Maintenance
     let limit_price = Price {
@@ -46,66 +33,45 @@ async fn test_ap_actor_lifecycle(pg_pool: sqlx::PgPool) {
         amount: dec!(50_000),
         is_percentage: false,
     };
-    let order_while_suspended = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd.clone(),
-        user_id: user.user_id,
-        order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-        order_details: OrderTicket::builder(OrderType::Limit, OrderSide::Buy, limit_price)
-            .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
-            .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
-            .volume(dec!(0.1))
-            .build()
-            .unwrap(),
-    });
+    let order_while_suspended = OrderTicket::builder(OrderType::Limit, OrderSide::Buy, limit_price)
+        .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
+        .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
+        .build()
+        .unwrap();
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        actor_tx
-            .send((resp_tx, order_while_suspended))
-            .await
-            .unwrap();
-        resp_rx.await.unwrap()
-    };
+    let resp = proc_router
+        .place_order(
+            btc_usd.clone(),
+            user.user_id,
+            OrderUuid(uuid::Uuid::new_v4()),
+            order_while_suspended,
+        )
+        .await;
     assert_eq!(resp, Err(MsgError::ProcessorIsSuspended));
 
     // Bring processor back online
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        actor_tx
-            .send((resp_tx, MsgIn::SetStatus(ProcStatus::Online)))
-            .await
-            .unwrap();
-        resp_rx.await.unwrap()
-    };
-    assert_eq!(resp, Ok(MsgOut::StatusChanged(ProcStatus::Online)));
+    let resp = proc_router
+        .set_status(btc_usd.clone(), ProcStatus::Online)
+        .await;
+    assert_eq!(resp.ok(), Some(ProcStatus::Online));
 
     // Orders should now be accepted again
-    let order_after_resume = MsgIn::PlaceOrder(PlaceOrderArgs {
-        base_quote: btc_usd,
-        user_id: user.user_id,
-        order_uuid: OrderUuid(uuid::Uuid::new_v4()),
-        order_details: OrderTicket::builder(OrderType::Limit, OrderSide::Buy, limit_price)
-            .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
-            .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
-            .volume(dec!(0.1))
-            .build()
-            .unwrap(),
-    });
+    let order_after_resume = OrderTicket::builder(OrderType::Limit, OrderSide::Buy, limit_price)
+        .quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
+        .display_quantity(NonZeroDecimal::new(dec!(0.1)).unwrap())
+        .build()
+        .unwrap();
 
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        actor_tx.send((resp_tx, order_after_resume)).await.unwrap();
-        resp_rx.await.unwrap()
-    }
-    .unwrap();
-    assert_eq!(
-        resp,
-        MsgOut::OrderPlaced,
-        "PlaceOrder after returning to Online should succeed"
-    );
-    assert_eq!(
-        resp,
-        MsgOut::OrderPlaced,
+    let resp = proc_router
+        .place_order(
+            btc_usd,
+            user.user_id,
+            OrderUuid(uuid::Uuid::new_v4()),
+            order_after_resume,
+        )
+        .await;
+    assert!(
+        resp.is_ok(),
         "PlaceOrder after returning to Online should succeed"
     );
 }

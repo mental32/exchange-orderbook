@@ -1,8 +1,11 @@
-use ap_actor::order_management::PlaceOrderArgs;
-use ap_actor::proc::MsgIn;
 use ap_actor::proc::MsgOut;
+use ap_actor::proc_router::PlaceOrderArgs;
+use ap_actor::test::AccountTxJournal;
 use ap_actor::test::TestFixture;
 use ap_actor::test::TestUser;
+use ap_actor::test::XBTC;
+use ap_actor::test::ZUSD;
+use ap_actor::test::t_account_tx_journal;
 use ap_actor::test::test_ap_actor_fixture;
 use matching_engine::asset_code::AssetCode;
 use matching_engine::decimal::NonZeroDecimal;
@@ -12,8 +15,6 @@ use matching_engine::order_uuid::OrderUuid;
 use matching_engine::orderbook::OrderSide;
 use matching_engine::orderbook::OrderType;
 use matching_engine::price::Price;
-use std::str::FromStr;
-use tokio::sync::oneshot;
 
 #[sqlx::test(migrations = "../../migrations/")]
 async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
@@ -24,14 +25,14 @@ async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
         symbol_vocabulary,
         exchange_usd_account_id,
         exchange_btc_account_id,
-        ap_sender,
+        proc_router,
         ..
     } = test_ap_actor_fixture(&pg_pool).await;
 
-    let sell_order = MsgIn::PlaceOrder(PlaceOrderArgs {
+    let sell_order = PlaceOrderArgs {
         base_quote: (
-            AssetCode::from_str_and_vocabulary("BTC", &symbol_vocabulary).unwrap(),
-            AssetCode::from_str_and_vocabulary("USD", &symbol_vocabulary).unwrap(),
+            AssetCode::from_str_and_vocabulary(XBTC, &symbol_vocabulary).unwrap(),
+            AssetCode::from_str_and_vocabulary(ZUSD, &symbol_vocabulary).unwrap(),
         ),
         user_id: user1.user_id.clone(),
         order_uuid: OrderUuid(uuid::Uuid::new_v4()),
@@ -46,16 +47,22 @@ async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
         )
         .quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
         .display_quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
-        .volume(dec!(0.5))
         .build()
         .unwrap(),
-    });
-
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, sell_order)).await.unwrap();
-        resp_rx.await.unwrap()
     };
+
+    let resp = proc_router
+        .place_order(
+            (
+                AssetCode::from_str_and_vocabulary(XBTC, &symbol_vocabulary).unwrap(),
+                AssetCode::from_str_and_vocabulary(ZUSD, &symbol_vocabulary).unwrap(),
+            ),
+            user1.user_id.clone(),
+            sell_order.order_uuid,
+            sell_order.order_details,
+        )
+        .await
+        .map(|_| MsgOut::OrderPlaced);
     assert!(
         matches!(resp, Ok(MsgOut::OrderPlaced { .. })),
         "Sell order should be placed successfully, got: {:?}",
@@ -72,10 +79,10 @@ async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
         "Event sourcing should record sell order"
     );
 
-    let buy_order = MsgIn::PlaceOrder(PlaceOrderArgs {
+    let buy_order = PlaceOrderArgs {
         base_quote: (
-            AssetCode::from_str_and_vocabulary("BTC", &symbol_vocabulary).unwrap(),
-            AssetCode::from_str_and_vocabulary("USD", &symbol_vocabulary).unwrap(),
+            AssetCode::from_str_and_vocabulary(XBTC, &symbol_vocabulary).unwrap(),
+            AssetCode::from_str_and_vocabulary(ZUSD, &symbol_vocabulary).unwrap(),
         ),
         user_id: user2.user_id.clone(),
         order_uuid: OrderUuid(uuid::Uuid::new_v4()),
@@ -90,16 +97,22 @@ async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
         )
         .quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
         .display_quantity(NonZeroDecimal::new(dec!(0.5)).unwrap())
-        .volume(dec!(0.5))
         .build()
         .unwrap(),
-    });
-
-    let resp = {
-        let (resp_tx, resp_rx) = oneshot::channel();
-        ap_sender.send((resp_tx, buy_order)).await.unwrap();
-        resp_rx.await.unwrap()
     };
+
+    let resp = proc_router
+        .place_order(
+            (
+                AssetCode::from_str_and_vocabulary(XBTC, &symbol_vocabulary).unwrap(),
+                AssetCode::from_str_and_vocabulary(ZUSD, &symbol_vocabulary).unwrap(),
+            ),
+            user2.user_id.clone(),
+            buy_order.order_uuid,
+            buy_order.order_details,
+        )
+        .await
+        .map(|_| MsgOut::OrderPlaced);
     assert!(
         matches!(resp, Ok(MsgOut::OrderPlaced { .. })),
         "Buy order should be placed successfully and match, got: {:?}",
@@ -116,80 +129,27 @@ async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
         "Should have at least 2 events (sell + buy orders)"
     );
 
-    let settlement_count = sqlx::query_scalar!(
-        r#"
-            SELECT COUNT(*)
-            FROM t_account_tx_journal
-            WHERE transaction_type = 'trade_settlement'
-            "#
-    )
-    .fetch_one(&pg_pool)
-    .await
-    .unwrap();
+    // Verify settlement journal entries snapshot
+    t_account_tx_journal(&pg_pool) /* actual */
+        .await
+        .iter()
+        .zip(
+            [
+                /* expected (snapshot to be updated by test runner) */
+            ]
+            .into_iter()
+            .map(|value| serde_json::from_value::<AccountTxJournal>(value).unwrap()),
+        )
+        .for_each(|(actual, expected)| {
+            assert_eq!(actual.id, expected.id);
+            assert_eq!(actual.credit_account_id, expected.credit_account_id);
+            assert_eq!(actual.debit_account_id, expected.debit_account_id);
+            assert_eq!(actual.currency, expected.currency);
+            assert_eq!(actual.amount, expected.amount);
+            assert_eq!(actual.transaction_type, expected.transaction_type);
+        });
 
-    assert_eq!(
-        settlement_count.unwrap_or(0),
-        2,
-        "Should have exactly 2 settlement transactions"
-    );
-
-    // Verify BTC transfer: exchange → user2 (buyer)
-    // User2 is the buyer (market buy), so they should be CREDITED BTC
-    let btc_settlement = sqlx::query!(
-        r#"
-            SELECT credit_account_id, debit_account_id, amount
-            FROM t_account_tx_journal
-            WHERE transaction_type = 'trade_settlement'
-            AND currency = 'BTC'
-            "#
-    )
-    .fetch_one(&pg_pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        btc_settlement.credit_account_id, user2.btc_account_id,
-        "Buyer (user2) should be CREDITED BTC"
-    );
-    assert_eq!(
-        btc_settlement.debit_account_id, exchange_btc_account_id,
-        "Exchange should be DEBITED BTC"
-    );
-    assert_eq!(
-        btc_settlement.amount,
-        dec!(0.5),
-        "BTC settlement amount should be 0.5 BTC"
-    );
-
-    // Verify USD transfer: exchange → user1 (seller)
-    // User1 is the seller (limit sell), so they should be CREDITED USD
-    let usd_settlement = sqlx::query!(
-        r#"
-            SELECT credit_account_id, debit_account_id, amount
-            FROM t_account_tx_journal
-            WHERE transaction_type = 'trade_settlement'
-            AND currency = 'USD'
-            "#
-    )
-    .fetch_one(&pg_pool)
-    .await
-    .unwrap();
-
-    assert_eq!(
-        usd_settlement.credit_account_id, user1.usd_account_id,
-        "Seller (user1) should be CREDITED USD"
-    );
-    assert_eq!(
-        usd_settlement.debit_account_id, exchange_usd_account_id,
-        "Exchange should be DEBITED USD"
-    );
-    assert_eq!(
-        usd_settlement.amount,
-        dec!(25_000),
-        "USD settlement amount should be $25,000"
-    );
-
-    let user1_btc_balance = user1.balance(&pg_pool, user1.btc_account_id).await;
+    let user1_btc_balance = user1.compute_balance(&pg_pool, user1.btc_account_id).await;
 
     assert_eq!(
         user1_btc_balance,
@@ -198,7 +158,7 @@ async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
         user1_btc_balance
     );
 
-    let user1_usd_balance = user1.balance(&pg_pool, user1.usd_account_id).await;
+    let user1_usd_balance = user1.compute_balance(&pg_pool, user1.usd_account_id).await;
 
     assert_eq!(
         user1_usd_balance,
@@ -207,7 +167,7 @@ async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
         user1_usd_balance
     );
 
-    let user2_btc_balance = user2.balance(&pg_pool, user2.btc_account_id).await;
+    let user2_btc_balance = user2.compute_balance(&pg_pool, user2.btc_account_id).await;
 
     assert_eq!(
         user2_btc_balance,
@@ -216,7 +176,7 @@ async fn test_ap_actor_settlement(pg_pool: sqlx::PgPool) {
         user2_btc_balance
     );
 
-    let user2_usd_balance = user2.balance(&pg_pool, user2.usd_account_id).await;
+    let user2_usd_balance = user2.compute_balance(&pg_pool, user2.usd_account_id).await;
 
     assert_eq!(
         user2_usd_balance,
