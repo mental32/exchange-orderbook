@@ -10,12 +10,16 @@ use crate::proc::OrderDescription;
 use crate::proc::OrderDescriptor;
 use crate::proc::OrderResult;
 use crate::proc::ProcHandle;
+use crate::proc::ProcStatus;
+use crate::proc::TickerSnapshot;
 use crate::user_profile::OpenOrder;
 use crate::user_profile::UserProfile;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use matching_engine::asset_code::SymbolVocabulary;
 use matching_engine::asset_pair::BaseQuote;
+use matching_engine::decimal::Decimal;
+use matching_engine::decimal::NonZeroDecimal;
 use matching_engine::order_ticket::OrderTicket;
 use matching_engine::order_uuid::OrderUuid;
 use std::collections::HashMap;
@@ -49,22 +53,22 @@ pub type CancelOrderError = ((), &'static str);
 
 #[derive(Debug)]
 struct Inner {
-    asset_processors: Vec<ProcHandle>,
-    tracking: HashMap<VirtualUserId, UserProfile>,
+    asset_processors: Box<[ProcHandle]>,
+    tracking: tokio::sync::RwLock<HashMap<VirtualUserId, UserProfile>>,
 }
 
 #[derive(Debug, Clone)]
-pub struct OrderManagement {
+pub struct ProcRouter {
     pub symbol_vocabulary: SymbolVocabulary,
     inner: Arc<Inner>,
 }
 
-impl OrderManagement {
+impl ProcRouter {
     pub fn new(symbol_vocabulary: SymbolVocabulary, asset_processors: Vec<ProcHandle>) -> Self {
         Self {
             symbol_vocabulary,
             inner: Arc::new(Inner {
-                asset_processors,
+                asset_processors: asset_processors.into(),
                 tracking: Default::default(),
             }),
         }
@@ -82,7 +86,9 @@ impl OrderManagement {
     }
 }
 
-impl OrderManagement {
+impl ProcRouter {
+    pub fn ticker(&self) -> () {}
+
     pub fn is_pair_enabled(&self, symbol: &str) -> Option<BaseQuote> {
         self.inner
             .asset_processors
@@ -91,15 +97,57 @@ impl OrderManagement {
             .map(|i| i.base_quote.clone())
     }
 
-    pub fn get_active_processors(&self) -> impl Iterator<Item = &ProcHandle> {
+    pub fn iter_active_processors(&self) -> impl Iterator<Item = &ProcHandle> {
         self.inner.asset_processors.iter()
     }
 
-    pub fn open_orders_for(&self, user_id: &VirtualUserId) -> Vec<OpenOrder> {
+    pub async fn set_status(
+        &self,
+        base_quote: BaseQuote,
+        status: ProcStatus,
+    ) -> Result<ProcStatus, MsgError> {
+        let Some(ap_snd) = self.get_asset_processor_channel(&base_quote) else {
+            return Err(MsgError::OrderNotFound);
+        };
+
+        let (msg_snd, msg_rcv) = oneshot::channel();
+        ap_snd
+            .send((msg_snd, MsgIn::SetStatus(status.clone())))
+            .await
+            .map_err(|_| MsgError::OrderNotFound)?;
+
+        match msg_rcv.await.map_err(|_| MsgError::OrderNotFound)? {
+            Ok(MsgOut::StatusChanged(new_status)) => Ok(new_status),
+            Ok(_) => Err(MsgError::OrderNotFound),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn ticker_snapshot(&self, base_quote: BaseQuote) -> Result<TickerSnapshot, MsgError> {
+        let Some(ap_snd) = self.get_asset_processor_channel(&base_quote) else {
+            return Err(MsgError::OrderNotFound);
+        };
+
+        let (msg_snd, msg_rcv) = oneshot::channel();
+        ap_snd
+            .send((msg_snd, MsgIn::TickerSnapshot))
+            .await
+            .map_err(|_| MsgError::OrderNotFound)?;
+
+        match msg_rcv.await.map_err(|_| MsgError::OrderNotFound)? {
+            Ok(MsgOut::TickerSnapshot { snapshot }) => Ok(snapshot),
+            Ok(_) => Err(MsgError::OrderNotFound),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn open_orders_for(&self, virtual_user_id: &VirtualUserId) -> Vec<OpenOrder> {
         self.inner
             .tracking
-            .get(user_id)
-            .map(|profile| profile.open_orders.clone())
+            .read()
+            .await
+            .get(virtual_user_id)
+            .map(|user_profile| user_profile.open_orders.clone())
             .unwrap_or_default()
     }
 
@@ -108,34 +156,40 @@ impl OrderManagement {
         cancel_order_by: CancelOrderBy,
         user_id: VirtualUserId,
     ) -> Result<(Vec<uuid::Uuid>, Vec<(uuid::Uuid, String)>), CancelOrderError> {
-        let mut pairs_to_contact = HashMap::new();
-
+        let mut pairs_to_contact: HashMap<BaseQuote, Vec<OrderUuid>> = HashMap::new();
         let mut success = vec![];
         let mut failed = vec![];
 
-        let pending = FuturesUnordered::new();
-
-        for open_order in self
-            .inner
-            .tracking
-            .get(&user_id)
-            .map(|profile| profile.isolate_orders_for_cancel(&cancel_order_by))
-            .unwrap_or_default()
-            .into_iter()
-        {
-            pairs_to_contact
-                .entry(open_order.base_quote)
-                .or_insert(vec![])
-                .push(open_order.order_uuid.clone());
+        if let Some(profile) = self.inner.tracking.read().await.get(&user_id) {
+            for open_order in profile.isolate_orders_for_cancel(&cancel_order_by) {
+                pairs_to_contact
+                    .entry(open_order.base_quote)
+                    .or_insert(vec![])
+                    .push(open_order.order_uuid.clone());
+            }
         }
+
+        if pairs_to_contact.is_empty() {
+            if let CancelOrderBy::TxId(order_uuid) = cancel_order_by {
+                if let Ok((base_quote, _)) =
+                    self.describe_order_any(user_id.clone(), order_uuid).await
+                {
+                    pairs_to_contact
+                        .entry(base_quote)
+                        .or_insert(vec![])
+                        .push(order_uuid);
+                } else {
+                    return Err(((), "order not found"));
+                }
+            } else {
+                return Err(((), "order not found"));
+            }
+        }
+
+        let pending = FuturesUnordered::new();
 
         for (base_quote, ids) in pairs_to_contact {
             let Some(ap_snd) = self.get_asset_processor_channel(&base_quote) else {
-                tracing::error!(
-                    base = ?base_quote.0.as_str(),
-                    quote = ?base_quote.1.as_str(),
-                    "attempted to cancel order on non-existent asset pair"
-                );
                 failed.extend(
                     ids.into_iter()
                         .map(|id| (id.0, "Asset pair not found".to_owned())),
@@ -179,6 +233,12 @@ impl OrderManagement {
             )
         }
 
+        if let Some(profile) = self.inner.tracking.write().await.get_mut(&user_id) {
+            profile
+                .open_orders
+                .retain(|open| !success.iter().any(|id| *id == open.order_uuid.0));
+        }
+
         Ok((success, failed))
     }
 
@@ -188,27 +248,12 @@ impl OrderManagement {
         user_id: VirtualUserId,
         amend_args: AmendOrderArgs,
     ) -> Result<OrderUuid, MsgError> {
-        // Find the order to determine its asset pair
         let base_quote = self
-            .inner
-            .tracking
-            .get(&user_id)
-            .and_then(|profile| {
-                profile
-                    .open_orders
-                    .iter()
-                    .find(|o| o.order_uuid == order_uuid)
-                    .map(|o| o.base_quote.clone())
-            })
-            .ok_or(MsgError::OrderNotFound)?;
-
+            .describe_order_any(user_id.clone(), order_uuid)
+            .await
+            .map(|(pair, _)| pair)?;
         let Some(ap_snd) = self.get_asset_processor_channel(&base_quote) else {
-            tracing::error!(
-                base = ?base_quote.0.as_str(),
-                quote = ?base_quote.1.as_str(),
-                "attempted to amend order on non-existent asset pair"
-            );
-            return Err(todo!(" (StatusCode::NOT_FOUND, \"Asset pair not found\") "));
+            return Err(MsgError::OrderNotFound);
         };
 
         let (msg_snd, msg_rcv) = oneshot::channel();
@@ -230,6 +275,7 @@ impl OrderManagement {
         &self,
         base_quote: BaseQuote,
         user_id: VirtualUserId,
+        order_uuid: OrderUuid,
         order_details: OrderTicket,
     ) -> Result<OrderUuid, MsgError> {
         let Some(ap_snd) = self.get_asset_processor_channel(&base_quote) else {
@@ -238,17 +284,17 @@ impl OrderManagement {
                 quote = ?base_quote.1.as_str(),
                 "attempted to place order on non-existent asset pair"
             );
-            return Err(todo!(" StatusCode::NOT_FOUND, \"Asset pair not found\""));
+            return Err(MsgError::OrderNotFound);
         };
 
-        let order_uuid = OrderUuid(uuid::Uuid::new_v4());
-
         let (msg_snd, msg_rcv) = oneshot::channel();
+        let msg_base_quote = base_quote.clone();
+        let msg_order_details = order_details.clone();
         let msg_in = MsgIn::PlaceOrder(PlaceOrderArgs {
-            base_quote,
+            base_quote: msg_base_quote,
             user_id: user_id.clone(),
             order_uuid,
-            order_details,
+            order_details: msg_order_details,
         });
 
         if let Err(err) = ap_snd.send((msg_snd, msg_in)).await {
@@ -262,12 +308,35 @@ impl OrderManagement {
         match msg_rcv.await.unwrap()? {
             MsgOut::OrderPlaced => {
                 tracing::info!(?order_uuid, "order placed");
+                let price = order_details.price.amount;
+                let price_nz = NonZeroDecimal::new(price)
+                    .or_else(|_| NonZeroDecimal::new(Decimal::ONE))
+                    .expect("non-zero fallback price");
+                let open_order = OpenOrder {
+                    base_quote,
+                    order_uuid,
+                    order_index: matching_engine::orderbook::OrderIndex {
+                        side: order_details.side,
+                        price: price_nz,
+                        timestamp: 0,
+                    },
+                    userref: order_details.userref,
+                    cl_ord_id: order_details.cl_ord_id.clone(),
+                };
+                let mut rw_lock_write_guard_tracking = self.inner.tracking.write().await;
+                let profile = rw_lock_write_guard_tracking
+                    .entry(user_id)
+                    .or_insert(UserProfile {
+                        open_orders: vec![],
+                    });
+                profile.open_orders.push(open_order);
                 Ok(order_uuid.clone())
             }
-            MsgOut::OrderValidated => todo!(),
+            MsgOut::OrderValidated => Err(MsgError::ProcessorIsSuspended),
             MsgOut::OrderCancelled { .. }
             | MsgOut::OrderAmended { .. }
             | MsgOut::OrderSnapshot { .. }
+            | MsgOut::TickerSnapshot { .. }
             | MsgOut::StatusChanged(_)
             | MsgOut::ShutdownAcknowledged => {
                 unreachable!("bug: these outputs should never be received")
@@ -287,15 +356,20 @@ impl OrderManagement {
         for order_details in orders {
             let descr = OrderDescription {
                 order: format!(
-                    "{:?} {} @ {:?} {}",
+                    "{:?} {:?} @ {:?} {}",
                     order_details.side,
-                    order_details.volume,
+                    order_details.quantity,
                     order_details.order_type,
                     order_details.price.amount.to_string()
                 ),
             };
             match self
-                .place_order(base_quote.clone(), user_id, order_details)
+                .place_order(
+                    base_quote.clone(),
+                    user_id,
+                    OrderUuid(uuid::Uuid::new_v4()),
+                    order_details,
+                )
                 .await
             {
                 Ok(order_uuid) => {
@@ -380,6 +454,7 @@ impl OrderManagement {
     ) -> Result<(BaseQuote, OrderDescriptor), MsgError> {
         if let Some(open_order) = self
             .open_orders_for(&user_id)
+            .await
             .into_iter()
             .find(|order| order.order_uuid == order_uuid)
         {

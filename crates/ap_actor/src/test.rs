@@ -1,18 +1,16 @@
-use crate::proc::Envelope;
 use crate::proc::launch_processors_for_pairs;
+use crate::proc_router::ProcRouter;
 use matching_engine::asset_code::AssetCode;
 use matching_engine::asset_code::SymbolVocabulary;
 use matching_engine::asset_pair::AssetPairRow;
 use matching_engine::asset_pair::BaseQuote;
 use matching_engine::decimal::Decimal;
 use matching_engine::decimal::dec;
-use matching_engine::order_ticket::OrderTicket;
-use matching_engine::order_ticket::OrderTicketBuilder;
-use matching_engine::orderbook::OrderSide;
-use matching_engine::orderbook::OrderType;
-use matching_engine::price::Price;
-use matching_engine::time::Time;
-use tokio::sync::mpsc;
+use sqlx::types::Json;
+use std::ops::DerefMut;
+
+pub const ZUSD: &str = "USD";
+pub const XBTC: &str = "BTC";
 
 pub struct TestUser {
     pub user_id: i32,
@@ -40,7 +38,7 @@ impl TestUser {
         let exchange_usd_account_id = sqlx::query_scalar!(
             "SELECT id FROM t_money_accounts WHERE fiat_source = $1 AND currency = $2",
             "exchange",
-            "USD"
+            ZUSD
         )
         .fetch_one(pg_pool)
         .await
@@ -49,7 +47,7 @@ impl TestUser {
         let exchange_btc_account_id = sqlx::query_scalar!(
             "SELECT id FROM t_money_accounts WHERE crypto_source = $1 AND currency = $2",
             "bitcoin",
-            "BTC"
+            XBTC
         )
         .fetch_one(pg_pool)
         .await
@@ -69,7 +67,7 @@ impl TestUser {
 
         let usd_account_id = sqlx::query_scalar!(
             "INSERT INTO t_money_accounts (currency, user_id) VALUES ($1, $2) RETURNING id",
-            "USD",
+            ZUSD,
             user_data_id
         )
         .fetch_one(pg_pool)
@@ -78,7 +76,7 @@ impl TestUser {
 
         let btc_account_id = sqlx::query_scalar!(
             "INSERT INTO t_money_accounts (currency, user_id) VALUES ($1, $2) RETURNING id",
-            "BTC",
+            XBTC,
             user_data_id
         )
         .fetch_one(pg_pool)
@@ -93,7 +91,7 @@ impl TestUser {
                 "#,
             usd_account_id,
             exchange_usd_account_id,
-            "USD",
+            ZUSD,
             dec!(100_000),
             "test_deposit",
             uuid::Uuid::new_v4().to_string()
@@ -110,7 +108,7 @@ impl TestUser {
                 "#,
             btc_account_id,
             exchange_btc_account_id,
-            "BTC",
+            XBTC,
             Decimal::from(10),
             "test_deposit",
             uuid::Uuid::new_v4().to_string()
@@ -125,7 +123,7 @@ impl TestUser {
         self
     }
 
-    pub async fn balance(&self, pg_pool: &sqlx::PgPool, account_id: i32) -> Decimal {
+    pub async fn compute_balance(&self, pg_pool: &sqlx::PgPool, account_id: i32) -> Decimal {
         sqlx::query_scalar!(
             r#"
                 SELECT COALESCE(
@@ -150,51 +148,64 @@ pub struct TestFixture {
     pub btc_usd: BaseQuote,
     pub exchange_usd_account_id: i32,
     pub exchange_btc_account_id: i32,
-    pub ap_sender: mpsc::Sender<Envelope>,
+    pub proc_router: ProcRouter,
 }
 
 pub async fn test_ap_actor_fixture(pg_pool: &sqlx::PgPool) -> TestFixture {
+    let mut transaction = pg_pool.begin().await.unwrap();
+
+    sqlx::query!("DELETE FROM t_trading_event_source")
+        .execute(transaction.deref_mut())
+        .await
+        .unwrap();
+
+    sqlx::query!("DELETE FROM t_account_tx_journal_outbox")
+        .execute(transaction.deref_mut())
+        .await
+        .unwrap();
+
     let asset_pair_row = sqlx::query_as!(
         AssetPairRow,
         r#"
             SELECT * FROM t_trading_asset_pairs
             WHERE base_asset = $1 AND quote_asset = $2
             "#,
-        "BTC",
-        "ZUSD"
+        XBTC,
+        ZUSD
     )
-    .fetch_one(pg_pool)
+    .fetch_one(transaction.deref_mut())
     .await
     .unwrap();
 
     let exchange_usd_account_id = sqlx::query_scalar!(
         "SELECT id FROM t_money_accounts WHERE fiat_source = $1 AND currency = $2",
         "exchange",
-        "USD"
+        ZUSD
     )
-    .fetch_one(pg_pool)
+    .fetch_one(transaction.deref_mut())
     .await
     .unwrap();
 
     let exchange_btc_account_id = sqlx::query_scalar!(
         "SELECT id FROM t_money_accounts WHERE crypto_source = $1 AND currency = $2",
         "bitcoin",
-        "BTC"
+        XBTC
     )
-    .fetch_one(pg_pool)
+    .fetch_one(transaction.deref_mut())
     .await
     .unwrap();
+    transaction.commit().await.unwrap();
 
-    let (symbol_vocabulary, ap_info) =
+    let (symbol_vocabulary, asset_processors) =
         launch_processors_for_pairs(vec![asset_pair_row.clone()], pg_pool.clone())
             .await
             .unwrap();
 
-    let ap_sender = ap_info.first().unwrap().mpsc_sender.clone();
+    let proc_router = ProcRouter::new(symbol_vocabulary.clone(), asset_processors);
 
     let btc_usd = (
-        AssetCode::from_str_and_vocabulary("BTC", &symbol_vocabulary).unwrap(),
-        AssetCode::from_str_and_vocabulary("USD", &symbol_vocabulary).unwrap(),
+        AssetCode::from_str_and_vocabulary(XBTC, &symbol_vocabulary).unwrap(),
+        AssetCode::from_str_and_vocabulary(ZUSD, &symbol_vocabulary).unwrap(),
     );
 
     TestFixture {
@@ -203,92 +214,41 @@ pub async fn test_ap_actor_fixture(pg_pool: &sqlx::PgPool) -> TestFixture {
         btc_usd,
         exchange_usd_account_id,
         exchange_btc_account_id,
-        ap_sender,
+        proc_router,
     }
 }
 
-pub fn non_zero(amount: Decimal) -> matching_engine::decimal::NonZeroDecimal {
-    matching_engine::decimal::NonZeroDecimal::new(amount)
-        .expect("quantity must be positive for tests")
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventSourceRow {
+    pub id: i64,
+    pub jstr: Json<serde_json::Value>,
+    pub quote_asset: String,
+    pub base_asset: String,
 }
 
-pub fn price_from_str(input: &str) -> Price {
-    use std::str::FromStr;
-    Price::from_str(input).expect("test price must parse")
+pub async fn t_trading_event_source(pg_pool: &sqlx::PgPool) -> Vec<EventSourceRow> {
+    sqlx::query_as!(
+        EventSourceRow,
+        "SELECT id, jstr, quote_asset, base_asset FROM t_trading_event_source"
+    )
+    .fetch_all(pg_pool)
+    .await
+    .unwrap()
 }
 
-pub fn price_absolute(amount: Decimal) -> Price {
-    Price {
-        prefix: None,
-        amount,
-        is_percentage: false,
-    }
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct AccountTxJournal {
+    pub id: i64,
+    pub credit_account_id: i64,
+    pub debit_account_id: i64,
+    pub currency: String,
+    pub amount: matching_engine::decimal::Decimal,
+    pub transaction_type: String,
 }
 
-pub fn limit_builder(
-    side: OrderSide,
-    price: impl Into<Price>,
-    volume: Decimal,
-) -> OrderTicketBuilder {
-    OrderTicket::builder(OrderType::Limit, side, price.into())
-        .quantity(non_zero(volume))
-        .volume(volume)
-}
-
-pub fn market_builder(
-    side: OrderSide,
-    reference_price: impl Into<Price>,
-    volume: Decimal,
-) -> OrderTicketBuilder {
-    OrderTicket::builder(OrderType::Market, side, reference_price.into())
-        .quantity(non_zero(volume))
-        .volume(volume)
-}
-
-pub fn stop_loss_builder(
-    side: OrderSide,
-    trigger_price: impl Into<Price>,
-    volume: Decimal,
-) -> OrderTicketBuilder {
-    OrderTicket::builder(OrderType::StopLoss, side, trigger_price.into())
-        .quantity(non_zero(volume))
-        .volume(volume)
-}
-
-pub fn stop_loss_limit_builder(
-    side: OrderSide,
-    trigger_price: impl Into<Price>,
-    limit_price: impl Into<Price>,
-    volume: Decimal,
-) -> OrderTicketBuilder {
-    OrderTicket::builder(OrderType::StopLossLimit, side, trigger_price.into())
-        .quantity(non_zero(volume))
-        .volume(volume)
-        .secondary_price(limit_price.into())
-}
-
-pub fn take_profit_builder(
-    side: OrderSide,
-    trigger_price: impl Into<Price>,
-    volume: Decimal,
-) -> OrderTicketBuilder {
-    OrderTicket::builder(OrderType::TakeProfit, side, trigger_price.into())
-        .quantity(non_zero(volume))
-        .volume(volume)
-}
-
-pub fn take_profit_limit_builder(
-    side: OrderSide,
-    trigger_price: impl Into<Price>,
-    limit_price: impl Into<Price>,
-    volume: Decimal,
-) -> OrderTicketBuilder {
-    OrderTicket::builder(OrderType::TakeProfitLimit, side, trigger_price.into())
-        .quantity(non_zero(volume))
-        .volume(volume)
-        .secondary_price(limit_price.into())
-}
-
-pub fn expiry_in_seconds(seconds: u64) -> Time {
-    Time::Scheduled(seconds)
+pub async fn t_account_tx_journal(pg_pool: &sqlx::PgPool) -> Vec<AccountTxJournal> {
+    sqlx::query_as!(AccountTxJournal, "SELECT id, credit_account_id, debit_account_id, currency, amount, transaction_type FROM t_account_tx_journal")
+        .fetch_all(pg_pool)
+        .await
+        .unwrap()
 }

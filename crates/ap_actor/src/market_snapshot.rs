@@ -38,7 +38,7 @@ pub fn trade_items_from_fills(
     trades
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct DepthLevel {
     pub price: Decimal,
     pub volume: Decimal,

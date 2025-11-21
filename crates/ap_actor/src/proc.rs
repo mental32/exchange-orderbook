@@ -1,6 +1,7 @@
 use crate::VirtualUserId;
-use crate::order_management::CancelOrderBy;
-use crate::order_management::PlaceOrderArgs;
+use crate::market_snapshot::DepthLevel;
+use crate::proc_router::CancelOrderBy;
+use crate::proc_router::PlaceOrderArgs;
 use crate::reserve_money::ReserveByAssetError;
 use crate::user_profile::OpenOrder;
 use crate::user_profile::UserProfile;
@@ -27,13 +28,13 @@ use matching_engine::try_fill_order::TryFillOrdersError;
 use sqlx::postgres::PgListener;
 use sqlx::postgres::PgNotification;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::time::SystemTime;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio::time::Instant;
 use tracing::Instrument as _;
 
 #[derive(Debug, Clone)]
@@ -79,6 +80,25 @@ pub struct OrderResult {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct TickerSnapshot {
+    pub last_trade_price: Option<Decimal>,
+    pub last_trade_volume: Option<Decimal>,
+    pub best_bid: Option<DepthLevel>,
+    pub best_ask: Option<DepthLevel>,
+    pub opening_price_today: Option<Decimal>,
+    pub high_today: Option<Decimal>,
+    pub low_today: Option<Decimal>,
+    pub vwap_today: Option<Decimal>,
+    pub high_24h: Option<Decimal>,
+    pub low_24h: Option<Decimal>,
+    pub vwap_24h: Option<Decimal>,
+    pub volume_today: Decimal,
+    pub volume_24h: Decimal,
+    pub trades_today: u64,
+    pub trades_24h: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AmendOrderArgs {
     pub user_id: VirtualUserId,
@@ -108,6 +128,7 @@ pub enum MsgIn {
     CancelOrderBy(CancelOrderByArgs),
     AmendOrder(AmendOrderArgs),
     DescribeOrder(DescribeOrderArgs),
+    TickerSnapshot,
     SetStatus(ProcStatus),
     Shutdown,
 }
@@ -125,6 +146,9 @@ pub enum MsgOut {
     },
     OrderSnapshot {
         descriptor: OrderDescriptor,
+    },
+    TickerSnapshot {
+        snapshot: TickerSnapshot,
     },
     StatusChanged(ProcStatus),
     ShutdownAcknowledged,
@@ -387,6 +411,13 @@ impl Balances {
     }
 }
 
+#[derive(Debug, Clone)]
+struct TickerTrade {
+    timestamp: SystemTime,
+    price: Decimal,
+    volume: Decimal,
+}
+
 struct Proc {
     pg_pool: sqlx::PgPool,
     orderbook: Orderbook<VirtualUserId>,
@@ -396,17 +427,132 @@ struct Proc {
     symbol_vocabulary: SymbolVocabulary,
     expiry_queue: Vec<(u64, OrderUuid, Option<OrderIndex>)>,
     trigger_orders: Vec<TriggerOrderEntry>,
-    next_trade_id: u64,
     last_traded_price: Option<NonZeroDecimal>,
+    last_trade_volume: Option<Decimal>,
+    ticker_trades: VecDeque<TickerTrade>,
     status: ProcStatus,
     will_shutdown: bool,
-    start_time: (Instant, SystemTime),
+    // start_time: (Instant, SystemTime),
 }
 
 type SwitchMsgInOutput = Result<MsgOut, MsgError>;
 
 impl Proc {
-    fn handle_expiry(&mut self) {
+    fn prune_ticker_trades(&mut self, now: SystemTime) {
+        let window_start = now
+            .checked_sub(std::time::Duration::from_secs(24 * 60 * 60))
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+
+        while let Some(front) = self.ticker_trades.front() {
+            if front.timestamp < window_start {
+                self.ticker_trades.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        if let Some(last) = self.ticker_trades.back() {
+            self.last_trade_volume = Some(last.volume);
+        } else {
+            self.last_trade_volume = None;
+        }
+    }
+
+    fn record_trade(&mut self, price: Decimal, volume: Decimal, now: SystemTime) {
+        if volume <= Decimal::ZERO {
+            return;
+        }
+
+        self.ticker_trades.push_back(TickerTrade {
+            timestamp: now,
+            price,
+            volume,
+        });
+        self.last_trade_volume = Some(volume);
+        self.prune_ticker_trades(now);
+    }
+
+    fn ticker_snapshot(&mut self, now: SystemTime) -> TickerSnapshot {
+        self.prune_ticker_trades(now);
+
+        let window_start = now
+            .checked_sub(std::time::Duration::from_secs(24 * 60 * 60))
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let now_secs = now
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let day_start_secs = now_secs - (now_secs % (24 * 60 * 60));
+        let day_start = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(day_start_secs);
+
+        let mut volume_24h = Decimal::ZERO;
+        let mut trades_24h = 0u64;
+        let mut vwap_num_24h = Decimal::ZERO;
+        let mut high_24h: Option<Decimal> = None;
+        let mut low_24h: Option<Decimal> = None;
+
+        let mut volume_today = Decimal::ZERO;
+        let mut trades_today = 0u64;
+        let mut vwap_num_today = Decimal::ZERO;
+        let mut high_today: Option<Decimal> = None;
+        let mut low_today: Option<Decimal> = None;
+        let mut opening_price_today: Option<(SystemTime, Decimal)> = None;
+
+        for trade in self.ticker_trades.iter() {
+            if trade.timestamp >= window_start {
+                volume_24h += trade.volume;
+                trades_24h += 1;
+                vwap_num_24h += trade.price * trade.volume;
+                high_24h = Some(high_24h.map_or(trade.price, |v| v.max(trade.price)));
+                low_24h = Some(low_24h.map_or(trade.price, |v| v.min(trade.price)));
+            }
+
+            if trade.timestamp >= day_start {
+                volume_today += trade.volume;
+                trades_today += 1;
+                vwap_num_today += trade.price * trade.volume;
+                high_today = Some(high_today.map_or(trade.price, |v| v.max(trade.price)));
+                low_today = Some(low_today.map_or(trade.price, |v| v.min(trade.price)));
+
+                opening_price_today = match opening_price_today {
+                    Some((ts, price)) if ts <= trade.timestamp => Some((ts, price)),
+                    _ => Some((trade.timestamp, trade.price)),
+                };
+            }
+        }
+
+        let best_bid = self.orderbook.bids().next().map(|(_, order)| DepthLevel {
+            price: *order.price.deref(),
+            volume: *order.remaining_quantity.deref(),
+            timestamp: now_secs,
+        });
+
+        let best_ask = self.orderbook.asks().next().map(|(_, order)| DepthLevel {
+            price: *order.price.deref(),
+            volume: *order.remaining_quantity.deref(),
+            timestamp: now_secs,
+        });
+
+        TickerSnapshot {
+            last_trade_price: self.last_traded_price.map(|p| *p.deref()),
+            last_trade_volume: self.last_trade_volume,
+            best_bid,
+            best_ask,
+            opening_price_today: opening_price_today.map(|(_, price)| price),
+            high_today,
+            low_today,
+            vwap_today: (volume_today > Decimal::ZERO).then_some(vwap_num_today / volume_today),
+            high_24h,
+            low_24h,
+            vwap_24h: (volume_24h > Decimal::ZERO).then_some(vwap_num_24h / volume_24h),
+            volume_today,
+            volume_24h,
+            trades_today,
+            trades_24h,
+        }
+    }
+
+    fn handle_expiry(&mut self, events: &mut Vec<BroadcastEvent>) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -464,15 +610,19 @@ impl Proc {
                     refund_amount.0 > Decimal::ZERO,
                     "refund amount must be positive"
                 );
-                self.balances
-                    .reserve_money_by_asset(
-                        balance_key,
-                        Money38_18(-refund_amount.0),
-                        self.asset_pair_row
-                            .base_quote(&self.symbol_vocabulary)
-                            .unwrap(),
-                    )
-                    .expect("trigger order expiry refund succeeds");
+                match self.balances.reserve_money_by_asset(
+                    balance_key,
+                    Money38_18(-refund_amount.0),
+                    self.asset_pair_row
+                        .base_quote(&self.symbol_vocabulary)
+                        .unwrap(),
+                ) {
+                    Ok(event) => events.push(event),
+                    Err(err) => {
+                        tracing::error!(?err, "trigger expiry refund failed");
+                        continue;
+                    }
+                }
 
                 continue;
             }
@@ -504,15 +654,19 @@ impl Proc {
                     reserved_amount.0 > Decimal::ZERO,
                     "reserved amount must be positive"
                 );
-                self.balances
-                    .reserve_money_by_asset(
-                        balance_key,
-                        Money38_18(-reserved_amount.0),
-                        self.asset_pair_row
-                            .base_quote(&self.symbol_vocabulary)
-                            .unwrap(),
-                    )
-                    .expect("refund transaction succeeds");
+                match self.balances.reserve_money_by_asset(
+                    balance_key,
+                    Money38_18(-reserved_amount.0),
+                    self.asset_pair_row
+                        .base_quote(&self.symbol_vocabulary)
+                        .unwrap(),
+                ) {
+                    Ok(event) => events.push(event),
+                    Err(err) => {
+                        tracing::error!(?err, "expiry refund failed");
+                        continue;
+                    }
+                }
 
                 self.orderbook
                     .remove(order_index)
@@ -540,6 +694,9 @@ impl Proc {
                 self.will_shutdown = true;
                 Ok(MsgOut::ShutdownAcknowledged)
             }
+            (M::TickerSnapshot, _) => Ok(MsgOut::TickerSnapshot {
+                snapshot: self.ticker_snapshot(SystemTime::now()),
+            }),
             (M::DescribeOrder(args), _) => self.describe_order(args, &mut events),
             (_, S::Maintenance) => Err(MsgError::ProcessorIsSuspended),
             (M::PlaceOrder(args), S::Online | S::PostOnly) => self.place_order(args, &mut events),
@@ -559,7 +716,7 @@ impl Proc {
             user_id,
             order_uuid,
         }: DescribeOrderArgs,
-        events: &mut Vec<BroadcastEvent>,
+        _events: &mut Vec<BroadcastEvent>,
     ) -> SwitchMsgInOutput {
         let descriptor = if let Some(entry_idx) = self
             .trigger_orders
@@ -721,7 +878,11 @@ impl Proc {
             // Update the trigger order entry
             let entry = &mut self.trigger_orders[trigger_idx];
             if let Some(new_qty) = args.new_order_qty {
-                entry.args.order_details.volume = new_qty;
+                entry
+                    .args
+                    .order_details
+                    .quantity
+                    .replace(NonZeroDecimal::new(new_qty).unwrap());
             }
             if let Some(new_trigger) = args.new_trigger_price {
                 entry.trigger_price = new_trigger;
@@ -935,7 +1096,8 @@ impl Proc {
         mut args: PlaceOrderArgs,
         events: &mut Vec<BroadcastEvent>,
     ) -> SwitchMsgInOutput {
-        let now = std::time::SystemTime::now()
+        let now_time = SystemTime::now();
+        let now = now_time
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
@@ -954,10 +1116,12 @@ impl Proc {
                 args.order_details.order_type,
             ) {
                 Ok(v) => v,
-                Err(_) => return Err(MsgError::InvalidPrice),
+                Err(matching_engine::price::InvalidPrice) => return Err(MsgError::InvalidPrice),
             }
         } else {
-            if args.order_details.price.is_relative() {
+            if args.order_details.price.prefix.is_none() && args.order_details.price.is_percentage {
+                return Err(MsgError::InvalidPrice);
+            } else if args.order_details.price.is_relative() {
                 return Err(MsgError::NoReferencePrice);
             } else {
                 match NonZeroDecimal::new(args.order_details.price.amount) {
@@ -1360,6 +1524,21 @@ impl Proc {
             .map(|fill| fill.order_index.price)
             .last();
 
+        let trade_records: Vec<(Decimal, Decimal)> = pending_fill
+            .fills
+            .iter()
+            .filter(|fill| fill.fill_type != FillType::Cancelled)
+            .map(|fill| {
+                let fill_volume = match fill.fill_type {
+                    FillType::Complete { quantity } => *quantity.deref(),
+                    FillType::Partial { amount_filled } => *amount_filled.deref(),
+                    FillType::Cancelled => Decimal::ZERO,
+                };
+
+                (*fill.order_index.price.deref(), fill_volume)
+            })
+            .collect();
+
         let fill_updates: Vec<(OrderIndex, Decimal)> = pending_fill
             .fills
             .iter()
@@ -1446,6 +1625,53 @@ impl Proc {
             for idx in triggered_indices.into_iter().rev() {
                 let entry = self.trigger_orders.remove(idx);
 
+                let (base, quote) = self
+                    .asset_pair_row
+                    .base_quote(&self.symbol_vocabulary)
+                    .expect("symbols are always resolvable");
+                let (currency, reserved_amount) = {
+                    let quantity = *entry.args.order_details.quantity.unwrap().deref();
+                    match entry.args.order_details.side {
+                        OrderSide::Buy => {
+                            // Buy trigger orders reserve quote at trigger price
+                            let amount = quantity * *entry.trigger_price.deref();
+                            (quote.clone(), Money38_18(amount))
+                        }
+                        OrderSide::Sell => {
+                            // Sell trigger orders reserve base quantity
+                            (base.clone(), Money38_18(quantity))
+                        }
+                    }
+                };
+
+                let balance_key = if currency == base {
+                    BalanceKey::Base(entry.user_id)
+                } else {
+                    BalanceKey::Quote(entry.user_id)
+                };
+
+                match self.balances.reserve_money_by_asset(
+                    balance_key,
+                    Money38_18(-reserved_amount.0),
+                    self.asset_pair_row
+                        .base_quote(&self.symbol_vocabulary)
+                        .unwrap(),
+                ) {
+                    Ok(event) => events.push(event),
+                    Err(err) => {
+                        return Err(match err {
+                            ReserveByAssetError::InsufficientFunds => MsgError::InsufficientFunds,
+                            ReserveByAssetError::AccountNotFound => MsgError::UserAccountNotFound {
+                                user_id: entry.user_id,
+                                asset_code: currency.clone(),
+                            },
+                            ReserveByAssetError::Database(error) => {
+                                MsgError::BalanceDatabase(error)
+                            }
+                        });
+                    }
+                }
+
                 let order_type_str = match entry.order_type {
                     TriggerOrderType::StopLoss => "stop-loss",
                     TriggerOrderType::TakeProfit => "take-profit",
@@ -1482,6 +1708,10 @@ impl Proc {
                 events.extend(triggered_events);
             }
         };
+
+        for (price, fill_volume) in trade_records {
+            self.record_trade(price, fill_volume, now_time);
+        }
 
         Ok(MsgOut::OrderPlaced)
     }
@@ -1687,11 +1917,256 @@ impl Proc {
 
         Ok(MsgOut::OrderCancelled { success, failed })
     }
+
+    async fn persist_events(&self, events: Vec<BroadcastEvent>) {
+        if events.is_empty() {
+            return;
+        }
+
+        let mut transaction = self.pg_pool.begin().await.unwrap();
+
+        for event in events {
+            tracing::trace!(?event, "broadcasting event");
+
+            match event {
+                BroadcastEvent::Reserve {
+                    user_id,
+                    amount,
+                    asset_code,
+                } => {
+                    if amount == Decimal::ZERO {
+                        continue;
+                    }
+
+                    let user_account_id = sqlx::query!(
+                        r#"
+                            SELECT id
+                            FROM t_money_accounts
+                            WHERE user_id = $1
+                              AND currency = $2
+                        "#,
+                        user_id,
+                        asset_code.as_str(),
+                    )
+                    .fetch_one(transaction.deref_mut())
+                    .await
+                    .expect("user money account must exist before reserving")
+                    .id;
+
+                    let exchange_account_id = if let Some(record) = sqlx::query!(
+                        r#"
+                            SELECT id
+                            FROM t_money_accounts
+                            WHERE currency = $1
+                              AND fiat_source IS NOT NULL
+                            LIMIT 1
+                        "#,
+                        asset_code.as_str(),
+                    )
+                    .fetch_optional(transaction.deref_mut())
+                    .await
+                    .expect("exchange fiat account lookup must succeed")
+                    {
+                        record.id
+                    } else {
+                        sqlx::query!(
+                            r#"
+                                SELECT id
+                                FROM t_money_accounts
+                                WHERE currency = $1
+                                  AND crypto_source IS NOT NULL
+                                LIMIT 1
+                            "#,
+                            asset_code.as_str(),
+                        )
+                        .fetch_one(transaction.deref_mut())
+                        .await
+                        .expect("exchange crypto account lookup must succeed")
+                        .id
+                    };
+
+                    if amount > Decimal::ZERO {
+                        sqlx::query!(
+                            r#"
+                                INSERT INTO t_account_tx_journal
+                                    (credit_account_id, debit_account_id, currency, amount, transaction_type, txid)
+                                VALUES ($1, $2, $3, $4::numeric, 'reserve asset', $5)
+                            "#,
+                            exchange_account_id,
+                            user_account_id,
+                            asset_code.as_str(),
+                            amount,
+                            uuid::Uuid::new_v4().to_string(),
+                        )
+                        .execute(transaction.deref_mut())
+                        .await
+                        .expect("reserving funds must succeed");
+                    } else {
+                        sqlx::query!(
+                            r#"
+                                INSERT INTO t_account_tx_journal
+                                    (credit_account_id, debit_account_id, currency, amount, transaction_type, txid)
+                                VALUES ($1, $2, $3, $4::numeric, 'cancel_refund', $5)
+                            "#,
+                            user_account_id,
+                            exchange_account_id,
+                            asset_code.as_str(),
+                            amount.abs(),
+                            uuid::Uuid::new_v4().to_string(),
+                        )
+                        .execute(transaction.deref_mut())
+                        .await
+                        .expect("refund must succeed");
+                    }
+                }
+                BroadcastEvent::Settlement {
+                    buyer_id,
+                    seller_id,
+                    base_amount,
+                    quote_amount,
+                    base_asset,
+                    quote_asset,
+                } => {
+                    if base_amount > Decimal::ZERO {
+                        let buyer_account_id = sqlx::query!(
+                            r#"
+                                SELECT id
+                                FROM t_money_accounts
+                                WHERE user_id = $1
+                                  AND currency = $2
+                            "#,
+                            buyer_id,
+                            base_asset.as_str(),
+                        )
+                        .fetch_one(transaction.deref_mut())
+                        .await
+                        .expect("buyer base account must exist")
+                        .id;
+
+                        let exchange_base_account_id = if let Some(record) = sqlx::query!(
+                            r#"
+                                SELECT id
+                                FROM t_money_accounts
+                                WHERE currency = $1
+                                  AND fiat_source IS NOT NULL
+                                LIMIT 1
+                            "#,
+                            base_asset.as_str(),
+                        )
+                        .fetch_optional(transaction.deref_mut())
+                        .await
+                        .expect("exchange base fiat account lookup must succeed")
+                        {
+                            record.id
+                        } else {
+                            sqlx::query!(
+                                r#"
+                                    SELECT id
+                                    FROM t_money_accounts
+                                    WHERE currency = $1
+                                      AND crypto_source IS NOT NULL
+                                    LIMIT 1
+                                "#,
+                                base_asset.as_str(),
+                            )
+                            .fetch_one(transaction.deref_mut())
+                            .await
+                            .expect("exchange base crypto account lookup must succeed")
+                            .id
+                        };
+
+                        sqlx::query!(
+                            r#"
+                                INSERT INTO t_account_tx_journal
+                                    (credit_account_id, debit_account_id, currency, amount, transaction_type, txid)
+                                VALUES ($1, $2, $3, $4::numeric, 'trade_settlement', $5)
+                            "#,
+                            buyer_account_id,
+                            exchange_base_account_id,
+                            base_asset.as_str(),
+                            base_amount,
+                            uuid::Uuid::new_v4().to_string(),
+                        )
+                        .execute(transaction.deref_mut())
+                        .await
+                        .expect("base settlement must succeed");
+                    }
+
+                    if quote_amount > Decimal::ZERO {
+                        let seller_account_id = sqlx::query!(
+                            r#"
+                                SELECT id
+                                FROM t_money_accounts
+                                WHERE user_id = $1
+                                  AND currency = $2
+                            "#,
+                            seller_id,
+                            quote_asset.as_str(),
+                        )
+                        .fetch_one(transaction.deref_mut())
+                        .await
+                        .expect("seller quote account must exist")
+                        .id;
+
+                        let exchange_quote_account_id = if let Some(record) = sqlx::query!(
+                            r#"
+                                SELECT id
+                                FROM t_money_accounts
+                                WHERE currency = $1
+                                  AND fiat_source IS NOT NULL
+                                LIMIT 1
+                            "#,
+                            quote_asset.as_str(),
+                        )
+                        .fetch_optional(transaction.deref_mut())
+                        .await
+                        .expect("exchange quote fiat account lookup must succeed")
+                        {
+                            record.id
+                        } else {
+                            sqlx::query!(
+                                r#"
+                                    SELECT id
+                                    FROM t_money_accounts
+                                    WHERE currency = $1
+                                      AND crypto_source IS NOT NULL
+                                    LIMIT 1
+                                "#,
+                                quote_asset.as_str(),
+                            )
+                            .fetch_one(transaction.deref_mut())
+                            .await
+                            .expect("exchange quote crypto account lookup must succeed")
+                            .id
+                        };
+
+                        sqlx::query!(
+                            r#"
+                                INSERT INTO t_account_tx_journal
+                                    (credit_account_id, debit_account_id, currency, amount, transaction_type, txid)
+                                VALUES ($1, $2, $3, $4::numeric, 'trade_settlement', $5)
+                            "#,
+                            seller_account_id,
+                            exchange_quote_account_id,
+                            quote_asset.as_str(),
+                            quote_amount,
+                            uuid::Uuid::new_v4().to_string(),
+                        )
+                        .execute(transaction.deref_mut())
+                        .await
+                        .expect("quote settlement must succeed");
+                    }
+                }
+            }
+        }
+
+        transaction.commit().await.unwrap();
+    }
 }
 
 async fn insert_into_t_trading_event_source(proc: &Proc, msg_in: &MsgIn) -> Result<(), MsgError> {
-    // Skip persisting Shutdown messages to event source - they shouldn't be replayed during recovery
-    if matches!(msg_in, MsgIn::Shutdown) {
+    // Skip persisting Shutdown or ticker snapshot messages to event source
+    if matches!(msg_in, MsgIn::Shutdown | MsgIn::TickerSnapshot) {
         return Ok(());
     }
 
@@ -1741,19 +2216,22 @@ async fn ap_loop_select(mut mpsc_receiver: mpsc::Receiver<Envelope>, mut proc: P
     // });
 
     while !proc.will_shutdown {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
         let expiry_sleep = match proc.expiry_queue.first() {
-            Some((expiry_ts, _, _)) => {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
-                if *expiry_ts <= now {
-                    tokio::time::sleep(std::time::Duration::ZERO)
-                } else {
-                    tokio::time::sleep(std::time::Duration::from_secs(expiry_ts - now))
-                }
+            Some((expiry_ts, _, _)) if *expiry_ts <= now => {
+                let mut events = vec![];
+                proc.handle_expiry(&mut events);
+                proc.persist_events(events).await;
+                continue;
             }
             None => tokio::time::sleep(std::time::Duration::from_secs(u64::MAX)),
+            Some((expiry_ts, _, _)) => {
+                tokio::time::sleep(std::time::Duration::from_secs(expiry_ts - now))
+            }
         };
 
         let event = tokio::select! {
@@ -1774,244 +2252,7 @@ async fn ap_loop_select(mut mpsc_receiver: mpsc::Receiver<Envelope>, mut proc: P
                         Ok(_) => proc.switch_msg_in(msg_in),
                     };
 
-                let mut transaction = proc.pg_pool.begin().await.unwrap();
-
-                for event in events {
-                    tracing::trace!(?event, "broadcasting event");
-
-                    match event {
-                        BroadcastEvent::Reserve {
-                            user_id,
-                            amount,
-                            asset_code,
-                        } => {
-                            if amount == Decimal::ZERO {
-                                continue;
-                            }
-
-                            let user_account_id = sqlx::query!(
-                                r#"
-                                    SELECT id
-                                    FROM t_money_accounts
-                                    WHERE user_id = $1
-                                      AND currency = $2
-                                "#,
-                                user_id,
-                                asset_code.as_str(),
-                            )
-                            .fetch_one(transaction.deref_mut())
-                            .await
-                            .expect("user money account must exist before reserving")
-                            .id;
-
-                            let exchange_account_id = if let Some(record) = sqlx::query!(
-                                r#"
-                                    SELECT id
-                                    FROM t_money_accounts
-                                    WHERE currency = $1
-                                      AND fiat_source IS NOT NULL
-                                    LIMIT 1
-                                "#,
-                                asset_code.as_str(),
-                            )
-                            .fetch_optional(transaction.deref_mut())
-                            .await
-                            .expect("exchange fiat account lookup must succeed")
-                            {
-                                record.id
-                            } else {
-                                sqlx::query!(
-                                    r#"
-                                        SELECT id
-                                        FROM t_money_accounts
-                                        WHERE currency = $1
-                                          AND crypto_source IS NOT NULL
-                                        LIMIT 1
-                                    "#,
-                                    asset_code.as_str(),
-                                )
-                                .fetch_one(transaction.deref_mut())
-                                .await
-                                .expect("exchange crypto account lookup must succeed")
-                                .id
-                            };
-
-                            if amount > Decimal::ZERO {
-                                sqlx::query!(
-                                    r#"
-                                        INSERT INTO t_account_tx_journal
-                                            (credit_account_id, debit_account_id, currency, amount, transaction_type, txid)
-                                        VALUES ($1, $2, $3, $4::numeric, 'reserve asset', $5)
-                                    "#,
-                                    exchange_account_id,
-                                    user_account_id,
-                                    asset_code.as_str(),
-                                    amount,
-                                    uuid::Uuid::new_v4().to_string(),
-                                )
-                                .execute(transaction.deref_mut())
-                                .await
-                                .expect("reserving funds must succeed");
-                            } else {
-                                sqlx::query!(
-                                    r#"
-                                        INSERT INTO t_account_tx_journal
-                                            (credit_account_id, debit_account_id, currency, amount, transaction_type, txid)
-                                        VALUES ($1, $2, $3, $4::numeric, 'cancel_refund', $5)
-                                    "#,
-                                    user_account_id,
-                                    exchange_account_id,
-                                    asset_code.as_str(),
-                                    amount.abs(),
-                                    uuid::Uuid::new_v4().to_string(),
-                                )
-                                .execute(transaction.deref_mut())
-                                .await
-                                .expect("refund must succeed");
-                            }
-                        }
-                        BroadcastEvent::Settlement {
-                            buyer_id,
-                            seller_id,
-                            base_amount,
-                            quote_amount,
-                            base_asset,
-                            quote_asset,
-                        } => {
-                            if base_amount > Decimal::ZERO {
-                                let buyer_account_id = sqlx::query!(
-                                    r#"
-                                        SELECT id
-                                        FROM t_money_accounts
-                                        WHERE user_id = $1
-                                          AND currency = $2
-                                    "#,
-                                    buyer_id,
-                                    base_asset.as_str(),
-                                )
-                                .fetch_one(transaction.deref_mut())
-                                .await
-                                .expect("buyer base account must exist")
-                                .id;
-
-                                let exchange_base_account_id = if let Some(record) = sqlx::query!(
-                                    r#"
-                                        SELECT id
-                                        FROM t_money_accounts
-                                        WHERE currency = $1
-                                          AND fiat_source IS NOT NULL
-                                        LIMIT 1
-                                    "#,
-                                    base_asset.as_str(),
-                                )
-                                .fetch_optional(transaction.deref_mut())
-                                .await
-                                .expect("exchange base fiat account lookup must succeed")
-                                {
-                                    record.id
-                                } else {
-                                    sqlx::query!(
-                                        r#"
-                                            SELECT id
-                                            FROM t_money_accounts
-                                            WHERE currency = $1
-                                              AND crypto_source IS NOT NULL
-                                            LIMIT 1
-                                        "#,
-                                        base_asset.as_str(),
-                                    )
-                                    .fetch_one(transaction.deref_mut())
-                                    .await
-                                    .expect("exchange base crypto account lookup must succeed")
-                                    .id
-                                };
-
-                                sqlx::query!(
-                                    r#"
-                                        INSERT INTO t_account_tx_journal
-                                            (credit_account_id, debit_account_id, currency, amount, transaction_type, txid)
-                                        VALUES ($1, $2, $3, $4::numeric, 'trade_settlement', $5)
-                                    "#,
-                                    buyer_account_id,
-                                    exchange_base_account_id,
-                                    base_asset.as_str(),
-                                    base_amount,
-                                    uuid::Uuid::new_v4().to_string(),
-                                )
-                                .execute(transaction.deref_mut())
-                                .await
-                                .expect("base settlement must succeed");
-                            }
-
-                            if quote_amount > Decimal::ZERO {
-                                let seller_account_id = sqlx::query!(
-                                    r#"
-                                        SELECT id
-                                        FROM t_money_accounts
-                                        WHERE user_id = $1
-                                          AND currency = $2
-                                    "#,
-                                    seller_id,
-                                    quote_asset.as_str(),
-                                )
-                                .fetch_one(transaction.deref_mut())
-                                .await
-                                .expect("seller quote account must exist")
-                                .id;
-
-                                let exchange_quote_account_id = if let Some(record) = sqlx::query!(
-                                    r#"
-                                        SELECT id
-                                        FROM t_money_accounts
-                                        WHERE currency = $1
-                                          AND fiat_source IS NOT NULL
-                                        LIMIT 1
-                                    "#,
-                                    quote_asset.as_str(),
-                                )
-                                .fetch_optional(transaction.deref_mut())
-                                .await
-                                .expect("exchange quote fiat account lookup must succeed")
-                                {
-                                    record.id
-                                } else {
-                                    sqlx::query!(
-                                        r#"
-                                            SELECT id
-                                            FROM t_money_accounts
-                                            WHERE currency = $1
-                                              AND crypto_source IS NOT NULL
-                                            LIMIT 1
-                                        "#,
-                                        quote_asset.as_str(),
-                                    )
-                                    .fetch_one(transaction.deref_mut())
-                                    .await
-                                    .expect("exchange quote crypto account lookup must succeed")
-                                    .id
-                                };
-
-                                sqlx::query!(
-                                    r#"
-                                        INSERT INTO t_account_tx_journal
-                                            (credit_account_id, debit_account_id, currency, amount, transaction_type, txid)
-                                        VALUES ($1, $2, $3, $4::numeric, 'trade_settlement', $5)
-                                    "#,
-                                    seller_account_id,
-                                    exchange_quote_account_id,
-                                    quote_asset.as_str(),
-                                    quote_amount,
-                                    uuid::Uuid::new_v4().to_string(),
-                                )
-                                .execute(transaction.deref_mut())
-                                .await
-                                .expect("quote settlement must succeed");
-                            }
-                        }
-                    }
-                }
-
-                transaction.commit().await.unwrap();
+                proc.persist_events(events).await;
 
                 if let Err(_response) = snd.send(response) {
                     tracing::warn!("original message requestor droppped reciever for response")
@@ -2020,7 +2261,11 @@ async fn ap_loop_select(mut mpsc_receiver: mpsc::Receiver<Envelope>, mut proc: P
             Event::PgEvent(event) => {
                 tracing::error!("unimplemented! account_tx_journal {event:#?}")
             }
-            Event::ExpiryReached => proc.handle_expiry(),
+            Event::ExpiryReached => {
+                let mut events = vec![];
+                proc.handle_expiry(&mut events);
+                proc.persist_events(events).await;
+            }
         }
     }
 }
@@ -2090,11 +2335,12 @@ pub async fn launch_processors_for_pairs<'a>(
                     symbol_vocabulary: symbol_vocabulary.clone(),
                     expiry_queue: vec![],
                     trigger_orders: vec![],
-                    next_trade_id: 0,
                     last_traded_price: None,
+                    last_trade_volume: None,
+                    ticker_trades: VecDeque::new(),
                     status: ProcStatus::Online,
                     will_shutdown: false,
-                    start_time: (Instant::now(), SystemTime::now()),
+                    // start_time: (Instant::now(), SystemTime::now()),
                 };
 
                 let t_trading_event_source = sqlx::query!(

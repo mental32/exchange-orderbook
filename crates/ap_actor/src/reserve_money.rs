@@ -128,8 +128,11 @@ pub async fn reserve_money_by_asset(
         .map_err(|_| ReserveByAssetError::AccountNotFound)?;
     let currency_str = currency.as_str();
 
-    // Determine if currency is fiat or crypto (simple heuristic: USD/EUR/GBP are fiat)
-    let is_fiat = matches!(currency_str, "USD" | "EUR" | "GBP");
+    // Determine if currency is fiat or crypto (simple heuristic: USD/EUR/GBP variants are fiat)
+    let is_fiat = matches!(
+        currency_str,
+        "USD" | "ZUSD" | "EUR" | "ZEUR" | "GBP" | "ZGBP"
+    );
 
     let rec = sqlx::query!(
         r#"
