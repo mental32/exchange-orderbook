@@ -36,7 +36,7 @@ impl Runner {
         steps: impl crate::steps::Steps,
         filter: &RunnerFilter,
     ) {
-        dbg!("🎯 Runner starting with filter: {:?}", filter);
+        tracing::debug!(?filter, "runner starting");
 
         // Run top-level scenarios first
         for scenario in &document.feature.scenarios {
@@ -55,10 +55,7 @@ impl Runner {
                     filter,
                 );
             } else {
-                dbg!(
-                    "🚫 Skipping scenario '{}' due to tag filter",
-                    &scenario.header.name
-                );
+                tracing::debug!(scenario = %scenario.header.name, "skipping scenario due to tag filter");
             }
         }
 
@@ -82,10 +79,7 @@ impl Runner {
                         filter,
                     );
                 } else {
-                    dbg!(
-                        "🚫 Skipping scenario '{}' due to tag filter",
-                        &scenario.header.name
-                    );
+                    tracing::debug!(scenario = %scenario.header.name, "skipping scenario due to tag filter");
                 }
             }
         }
@@ -128,21 +122,18 @@ impl Runner {
                 // Apply tag filtering at the Examples block level
                 if let Some(tag_expr) = &filter.tag_expression {
                     let should_run_examples = tag_expr.evaluate(&effective_tags);
-                    dbg!(
-                        "📊 Examples tag filter evaluation: {:?} against tags {:?} = {}",
-                        tag_expr,
-                        effective_tags,
-                        should_run_examples
+                    tracing::debug!(
+                        ?tag_expr,
+                        ?effective_tags,
+                        should_run_examples,
+                        "examples tag filter evaluation"
                     );
                     if !should_run_examples {
-                        dbg!(
-                            "🚫 Skipping Examples '{}' due to tag filter",
-                            &example_set.header.name
-                        );
+                        tracing::debug!(example = %example_set.header.name, "skipping examples due to tag filter");
                         continue; // Skip this entire Examples block
                     }
                 } else {
-                    dbg!("✅ No tag filter, running Examples block");
+                    tracing::debug!("no tag filter, running Examples block");
                 }
 
                 // For Examples, we need to get feature + rule + scenario + examples tags
@@ -275,15 +266,6 @@ impl Runner {
         effective.sort();
         effective.dedup();
 
-        dbg!(
-            "🏷️ Effective tags computed: feature={:?} + rule={:?} + scenario={:?} + examples={:?} = {:?}",
-            feature_tags,
-            rule_tags,
-            scenario_tags,
-            examples_tags,
-            &effective
-        );
-
         effective
     }
 
@@ -300,15 +282,10 @@ impl Runner {
             let effective =
                 self.effective_tags(feature_tags, rule_tags, scenario_tags, examples_tags);
             let should_run = tag_expr.evaluate(&effective);
-            dbg!(
-                "📊 Tag filter evaluation: {:?} against tags {:?} = {}",
-                tag_expr,
-                effective,
-                should_run
-            );
+            tracing::debug!(?tag_expr, ?effective, should_run, "tag filter evaluation");
             should_run
         } else {
-            dbg!("✅ No tag filter, running scenario");
+            tracing::debug!("no tag filter, running scenario");
             true
         }
     }

@@ -3,7 +3,7 @@
 /// Provides publish-subscribe event system for test execution lifecycle,
 /// enabling reporters, logging, and real-time monitoring of test runs.
 ///
-/// Events follow the Oracle guidance for comprehensive observability:
+/// Events for test execution observability:
 /// - TestRunStarted/TestRunFinished for overall execution
 /// - FeatureStarted/FeatureFinished for feature-level reporting
 /// - ScenarioStarted/ScenarioFinished for scenario-level tracking
@@ -150,22 +150,26 @@ impl EventBus {
 
     /// Subscribe a listener to events
     pub fn subscribe<L: EventListener + 'static>(&self, listener: L) {
-        let mut listeners = self.listeners.write().unwrap();
-        listeners.push(Arc::new(Mutex::new(listener)));
-        dbg!("Subscribed listener to event bus");
+        if let Ok(mut listeners) = self.listeners.write() {
+            listeners.push(Arc::new(Mutex::new(listener)));
+        } else {
+            tracing::warn!("event bus write lock poisoned during subscribe");
+        }
     }
 
     /// Publish an event to all listeners
     pub fn publish(&self, event: TestEvent) {
-        dbg!("Publishing event: {:?}", &event);
-        let listeners = self.listeners.read().unwrap();
-
-        for listener in listeners.iter() {
-            if let Ok(mut listener) = listener.try_lock() {
-                listener.on_event(&event);
-            } else {
-                eprintln!("Warning: Could not acquire lock on event listener");
+        match self.listeners.read() {
+            Ok(listeners) => {
+                for listener in listeners.iter() {
+                    if let Ok(mut listener) = listener.try_lock() {
+                        listener.on_event(&event);
+                    } else {
+                        tracing::warn!("could not acquire lock on event listener");
+                    }
+                }
             }
+            Err(_) => tracing::warn!("event bus read lock poisoned during publish"),
         }
     }
 

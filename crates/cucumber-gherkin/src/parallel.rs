@@ -3,7 +3,7 @@
 //! Provides per-scenario parallel test execution with proper World isolation,
 //! thread-safe event reporting, and comprehensive hook support.
 //!
-//! Oracle-guided design:
+//! Design:
 //! - Concurrency model: run each Scenario as an independent job
 //! - Hook semantics: BeforeAll/AfterAll run serially, Before/After per-scenario
 //! - World isolation: each scenario gets a fresh World instance
@@ -103,7 +103,7 @@ impl<W: World + Send + 'static> ParallelExecutor<W> {
         hook_registry: Arc<HookRegistry<W>>,
         steps: Arc<dyn Steps + Send + Sync>,
     ) -> Self {
-        dbg!("🚀 Creating ParallelExecutor with {} workers", config.jobs);
+        tracing::debug!(workers = config.jobs, "creating ParallelExecutor");
         Self {
             config,
             event_bus,
@@ -117,7 +117,7 @@ impl<W: World + Send + 'static> ParallelExecutor<W> {
         let mut executable_scenarios = Vec::new();
         let mut scenario_id = 0;
 
-        dbg!("📋 Planning executable scenarios from document");
+        tracing::debug!("planning executable scenarios from document");
 
         let feature = &document.feature;
         // Process top-level scenarios
@@ -150,11 +150,12 @@ impl<W: World + Send + 'static> ParallelExecutor<W> {
                 steps,
             };
 
-            dbg!(
-                "🎯 Planned scenario {} (id={}): {} with {} steps",
-                scenario_id,
-                &executable.origin.scenario_name,
-                executable.steps.len()
+            tracing::debug!(
+                target: "cucumber_parallel",
+                planned_id = scenario_id,
+                scenario = %executable.origin.scenario_name,
+                steps = executable.steps.len(),
+                "planned scenario"
             );
 
             executable_scenarios.push(executable);
@@ -171,7 +172,7 @@ impl<W: World + Send + 'static> ParallelExecutor<W> {
                     steps.extend(background.steps.iter().map(|(step, _span)| step.clone()));
                 }
 
-                // Add rule background steps (Oracle: Rule background overrides Feature background)
+                // Add rule background steps: rule background overrides Feature background
                 if let Some(ref rule_background) = rule.background {
                     steps.extend(
                         rule_background
@@ -203,11 +204,12 @@ impl<W: World + Send + 'static> ParallelExecutor<W> {
                     steps,
                 };
 
-                dbg!(
-                    "🎯 Planned rule scenario {} (id={}): {} with {} steps",
-                    scenario_id,
-                    &executable.origin.scenario_name,
-                    executable.steps.len()
+                tracing::debug!(
+                    target: "cucumber_parallel",
+                    planned_id = scenario_id,
+                    scenario = %executable.origin.scenario_name,
+                    steps = executable.steps.len(),
+                    "planned rule scenario"
                 );
 
                 executable_scenarios.push(executable);
@@ -215,9 +217,10 @@ impl<W: World + Send + 'static> ParallelExecutor<W> {
             }
         }
 
-        dbg!(
-            "📊 Planned {} executable scenarios total",
-            executable_scenarios.len()
+        tracing::debug!(
+            target: "cucumber_parallel",
+            planned = executable_scenarios.len(),
+            "planned executable scenarios"
         );
         executable_scenarios
     }
@@ -226,10 +229,11 @@ impl<W: World + Send + 'static> ParallelExecutor<W> {
     pub fn execute(&self, scenarios: Vec<ExecutableScenario>) -> RunResult {
         let start_time = SystemTime::now();
 
-        dbg!(
-            "🚀 Starting parallel execution with {} scenarios on {} workers",
-            scenarios.len(),
-            self.config.jobs
+        tracing::info!(
+            target: "cucumber_parallel",
+            scenarios = scenarios.len(),
+            workers = self.config.jobs,
+            "starting parallel execution"
         );
 
         // Run BeforeAll hooks serially
@@ -253,35 +257,33 @@ impl<W: World + Send + 'static> ParallelExecutor<W> {
 
             let handle = thread::spawn(move || {
                 let thread_id = format!("{:?}", thread::current().id());
-                event_tx
-                    .send(ParallelEvent::WorkerStarted {
-                        worker_id,
-                        thread_id: thread_id.clone(),
-                    })
-                    .unwrap();
-                dbg!("🔧 Worker {} started on thread {}", worker_id, &thread_id);
+                let _ = event_tx.send(ParallelEvent::WorkerStarted {
+                    worker_id,
+                    thread_id: thread_id.clone(),
+                });
+                tracing::debug!(worker_id, thread = %thread_id, "worker started");
 
                 while let Ok(scenario) = job_rx.recv() {
-                    event_tx
-                        .send(ParallelEvent::ScenarioAssigned {
-                            scenario_id: scenario.scenario_id,
-                            worker_id,
-                        })
-                        .unwrap();
+                    let _ = event_tx.send(ParallelEvent::ScenarioAssigned {
+                        scenario_id: scenario.scenario_id,
+                        worker_id,
+                    });
 
                     let scenario_result =
                         Self::execute_scenario_with_world(scenario, &*steps, &*hook_registry);
 
-                    results.lock().unwrap().push(scenario_result);
+                    if let Ok(mut guard) = results.lock() {
+                        guard.push(scenario_result);
+                    } else {
+                        tracing::error!("results mutex poisoned");
+                    }
                 }
 
-                event_tx
-                    .send(ParallelEvent::WorkerStopped {
-                        worker_id,
-                        thread_id,
-                    })
-                    .unwrap();
-                dbg!("🔧 Worker {} stopped", worker_id);
+                let _ = event_tx.send(ParallelEvent::WorkerStopped {
+                    worker_id,
+                    thread_id,
+                });
+                tracing::debug!(worker_id, "worker stopped");
             });
 
             worker_handles.push(handle);
@@ -290,7 +292,7 @@ impl<W: World + Send + 'static> ParallelExecutor<W> {
         // Enqueue all scenarios
         for scenario in scenarios {
             if let Err(e) = job_tx.send(scenario) {
-                eprintln!("Failed to enqueue scenario: {}", e);
+                tracing::error!(?e, "failed to enqueue scenario");
             }
         }
         drop(job_tx); // Close the channel to signal workers to finish
@@ -298,13 +300,13 @@ impl<W: World + Send + 'static> ParallelExecutor<W> {
         // Process events (simplified for now)
         drop(event_tx);
         while let Ok(event) = event_rx.recv() {
-            dbg!("📡 Parallel event: {:?}", event);
+            tracing::debug!(?event, "parallel event");
         }
 
         // Wait for all workers to finish
         for handle in worker_handles {
-            if let Err(e) = handle.join() {
-                eprintln!("Worker thread panicked: {:?}", e);
+            if let Err(err) = handle.join() {
+                tracing::error!(?err, "worker thread panicked");
             }
         }
 
@@ -312,15 +314,16 @@ impl<W: World + Send + 'static> ParallelExecutor<W> {
         self.run_after_all_hooks();
 
         // Collect results
-        let scenario_results = results.lock().unwrap().clone();
+        let scenario_results = results.lock().unwrap();
         let end_time = SystemTime::now();
         let duration = end_time
             .duration_since(start_time)
             .unwrap_or(Duration::from_secs(0));
 
-        dbg!(
-            "✅ Parallel execution completed in {}ms",
-            duration.as_millis()
+        tracing::info!(
+            target: "cucumber_parallel",
+            elapsed_ms = duration.as_millis(),
+            "parallel execution completed"
         );
 
         // Build RunResult
@@ -775,7 +778,7 @@ mod tests {
                 assert_eq!(worker_id, 0);
                 assert_eq!(thread_id, "thread-1");
             }
-            _ => panic!("Wrong event type"),
+            other => unreachable!("expected WorkerStarted, got {other:?}"),
         }
 
         match event2 {
@@ -786,7 +789,7 @@ mod tests {
                 assert_eq!(scenario_id, 5);
                 assert_eq!(worker_id, 2);
             }
-            _ => panic!("Wrong event type"),
+            other => unreachable!("expected ScenarioAssigned, got {other:?}"),
         }
 
         match event3 {
@@ -797,7 +800,7 @@ mod tests {
                 assert_eq!(worker_id, 1);
                 assert_eq!(thread_id, "thread-2");
             }
-            _ => panic!("Wrong event type"),
+            other => unreachable!("expected WorkerStopped, got {other:?}"),
         }
     }
 

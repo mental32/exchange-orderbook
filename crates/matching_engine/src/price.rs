@@ -71,6 +71,11 @@ impl Price {
         order_side: OrderSide,
         order_type: OrderType,
     ) -> Result<NonZeroDecimal, InvalidPrice> {
+        if self.prefix.is_none() && self.is_percentage {
+            // Percentage without prefix is invalid
+            return Err(InvalidPrice);
+        }
+
         let amount_delta = self.amount; // may be zero (valid for percentage) or negative (valid for absolute)
 
         if let Some(PricePrefix::Sub) = self.prefix

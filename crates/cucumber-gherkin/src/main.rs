@@ -32,7 +32,8 @@ fn main() {
 
     for file in opts.files {
         let file_as_str = format!("{}", file.display());
-        let src = std::fs::read_to_string(&file).unwrap();
+        let src = std::fs::read_to_string(&file)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", file_as_str));
         let (output, errors) = document_p().parse(&src).into_output_errors();
 
         if !errors.is_empty() {
@@ -94,7 +95,7 @@ fn main() {
                         runner.run_with_filter(&document, DefaultSteps, &filter);
                     }
                     Err(e) => {
-                        eprintln!("❌ Invalid tag expression '{}': {}", tag_expr_str, e);
+                        eprintln!("Invalid tag expression '{}': {}", tag_expr_str, e);
                         std::process::exit(1);
                     }
                 }

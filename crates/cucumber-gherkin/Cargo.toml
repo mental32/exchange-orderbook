@@ -12,7 +12,8 @@ num_cpus = "1.16.0"
 rayon = "1.11.0"
 serde = { workspace = true, optional = true }
 serde_json = { version = "1.0", optional = true }
-yansi = { version = "1.0.1", features = ["detect-env", "detect-tty"] }
+yansi = { version = "1", features = ["detect-env", "detect-tty"] }
+tracing.workspace = true
 
 [features]
 default = ["serde"]

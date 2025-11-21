@@ -1,27 +1,7 @@
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
-/// Result Model for cucumber-gherkin
-///
-/// This module provides canonical result types and event bus for comprehensive
-/// test execution reporting, CI integration, and tooling support.
-///
-/// Based on Oracle guidance for highest-impact improvements:
-/// - Enables JUnit XML for CI integration
-/// - Provides foundation for parallel execution
-/// - Enables rich HTML reporting via Cucumber Messages
-/// - Supports attachments and detailed observability
 use std::time::Duration;
-/// Result Model for cucumber-gherkin
-///
-/// This module provides canonical result types and event bus for comprehensive
-/// test execution reporting, CI integration, and tooling support.
-///
-/// Based on Oracle guidance for highest-impact improvements:
-/// - Enables JUnit XML for CI integration
-/// - Provides foundation for parallel execution
-/// - Enables rich HTML reporting via Cucumber Messages
-/// - Supports attachments and detailed observability
 use std::time::SystemTime;
 
 /// Unique identifier for test execution components
@@ -74,7 +54,7 @@ pub enum StepStatus {
     Failed,
     /// Step was skipped due to previous failure
     Skipped,
-    /// Step definition exists but not implemented (todo!())
+    /// Step definition exists but not implemented
     Pending,
     /// No step definition found
     Undefined,

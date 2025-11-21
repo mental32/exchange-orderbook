@@ -42,19 +42,16 @@ impl<W: World> WorldRunner<W> {
 
     /// Run document with filtering and World/hooks support
     pub fn run_with_filter(&self, document: &Document, steps: impl Steps, filter: &RunnerFilter) {
-        dbg!("🌍 WorldRunner starting with filter: {:?}", filter);
+        tracing::debug!(?filter, "world runner starting");
 
         // Run BeforeAll hooks once
         let before_all_results = self.hook_registry.run_before_all();
-        dbg!(
-            "🎣 BeforeAll results: {} hooks executed",
-            before_all_results.len()
-        );
+        tracing::debug!(count = before_all_results.len(), "BeforeAll results");
 
         // Track if any BeforeAll hooks failed
         let before_all_failed = before_all_results.iter().any(|r| r.is_failure());
         if before_all_failed {
-            dbg!("🚨 BeforeAll hook failed, aborting execution");
+            tracing::warn!("BeforeAll hook failed, aborting execution");
             return;
         }
 
@@ -76,10 +73,7 @@ impl<W: World> WorldRunner<W> {
                     &[],
                 );
             } else {
-                dbg!(
-                    "🚫 Skipping scenario '{}' due to tag filter",
-                    &scenario.header.name
-                );
+                tracing::debug!(scenario = %scenario.header.name, "skipping scenario due to tag filter");
             }
         }
 
@@ -104,20 +98,14 @@ impl<W: World> WorldRunner<W> {
                         &rule.header.tags,
                     );
                 } else {
-                    dbg!(
-                        "🚫 Skipping scenario '{}' due to tag filter",
-                        &scenario.header.name
-                    );
+                    tracing::debug!(scenario = %scenario.header.name, "skipping scenario due to tag filter");
                 }
             }
         }
 
         // Run AfterAll hooks once
         let after_all_results = self.hook_registry.run_after_all();
-        dbg!(
-            "🎣 AfterAll results: {} hooks executed",
-            after_all_results.len()
-        );
+        tracing::debug!(hooks = after_all_results.len(), "AfterAll results");
     }
 
     /// Run a single scenario with World isolation and hook execution
@@ -220,13 +208,10 @@ impl<W: World> WorldRunner<W> {
         for hook in before_hooks {
             dbg!("▶️ Executing Before hook: {}", &hook.name);
             let result = (hook.hook_fn)(world);
-            dbg!("🎣 Before hook '{}' result: {:?}", &hook.name, &result);
+            tracing::debug!(hook = %hook.name, ?result, "Before hook result");
 
             if result.is_failure() {
-                dbg!(
-                    "🚨 Before hook '{}' failed, marking scenario as failed",
-                    &hook.name
-                );
+                tracing::warn!(hook = %hook.name, "Before hook failed, marking scenario as failed");
                 scenario_failed = true;
                 break;
             }
@@ -413,15 +398,15 @@ impl<W: World> WorldRunner<W> {
             let effective_tags =
                 self.effective_tags(feature_tags, rule_tags, scenario_tags, examples_tags);
             let should_run = tag_expr.evaluate(&effective_tags);
-            dbg!(
-                "🏷️ Tag filter evaluation: {:?} against tags {:?} = {}",
-                tag_expr,
-                effective_tags,
-                should_run
+            tracing::debug!(
+                ?tag_expr,
+                ?effective_tags,
+                should_run,
+                "tag filter evaluation"
             );
             should_run
         } else {
-            dbg!("✅ No tag filter, scenario will run");
+            tracing::debug!("no tag filter, scenario will run");
             true
         }
     }
@@ -440,7 +425,6 @@ impl<W: World> WorldRunner<W> {
         tags.extend_from_slice(examples_tags);
         tags.sort();
         tags.dedup();
-        dbg!("🏷️ Effective tags: {:?}", &tags);
         tags
     }
 
@@ -452,12 +436,6 @@ impl<W: World> WorldRunner<W> {
             let placeholder = format!("<{}>", header);
             substituted_text = substituted_text.replace(&placeholder, value);
         }
-
-        dbg!(
-            "🔄 Parameter substitution: '{}' -> '{}'",
-            step_text,
-            substituted_text
-        );
 
         // Note: This is a simplified substitution that only handles text.
         // Full implementation would need to parse the substituted text back into StepText parts
@@ -497,11 +475,16 @@ mod tests {
 
     impl TestWorld {
         fn log_event(&mut self, event: &str) {
-            self.execution_log.lock().unwrap().push(event.to_string());
+            if let Ok(mut guard) = self.execution_log.lock() {
+                guard.push(event.to_string());
+            }
         }
 
         fn get_log(&self) -> Vec<String> {
-            self.execution_log.lock().unwrap().clone()
+            self.execution_log
+                .lock()
+                .map(|g| g.clone())
+                .unwrap_or_default()
         }
     }
 

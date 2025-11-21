@@ -32,7 +32,6 @@ pub struct OrderTicket {
     pub cl_ord_id: Option<String>,
     #[serde(with = "crate::time")]
     pub expiry_time: Time,
-    pub volume: Decimal,
     #[serde(
         default,
         deserialize_with = "crate::price::deserialize_price_option",
@@ -59,7 +58,6 @@ pub struct OrderTicketBuilder {
     userref: Option<u32>,
     cl_ord_id: Option<String>,
     expiry_time: Option<Time>,
-    volume: Option<Decimal>,
     secondary_price: Option<Price>,
     order_flags: Option<OrderFlags>,
     validate_only: Option<bool>,
@@ -84,7 +82,6 @@ impl OrderTicketBuilder {
             userref: None,
             cl_ord_id: None,
             expiry_time: None,
-            volume: None,
             secondary_price: None,
             order_flags: None,
             validate_only: None,
@@ -105,7 +102,6 @@ impl OrderTicketBuilder {
             userref: self.userref,
             cl_ord_id: self.cl_ord_id,
             expiry_time: self.expiry_time.unwrap_or_default(),
-            volume: self.volume.unwrap_or_default(),
             secondary_price: self.secondary_price,
             order_flags: self.order_flags.unwrap_or_default(),
             validate_only: self.validate_only.unwrap_or_default(),
@@ -159,11 +155,6 @@ impl OrderTicketBuilder {
 
     pub fn expiry_time(mut self, expiry_time: Time) -> Self {
         self.expiry_time = Some(expiry_time);
-        self
-    }
-
-    pub fn volume(mut self, volume: Decimal) -> Self {
-        self.volume = Some(volume);
         self
     }
 

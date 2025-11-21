@@ -169,12 +169,11 @@ impl TagOperation {
             .then_ignore(end())
         }
 
-        println!("Parsing tag expression: {}", expression);
         let parser = tag_expression_parser();
 
         match parser.parse(expression.trim()).into_result() {
             Ok(result) => {
-                println!("Successfully parsed tag expression: {:?}", result);
+                tracing::debug!(?result, "parsed tag expression");
                 Ok(result)
             }
             Err(errs) => {
@@ -182,7 +181,7 @@ impl TagOperation {
                     "Failed to parse tag expression '{}': {:?}",
                     expression, errs
                 );
-                println!("{}", error_msg);
+                tracing::warn!(?error_msg, "failed to parse tag expression");
                 Err(error_msg)
             }
         }
@@ -190,48 +189,15 @@ impl TagOperation {
 
     /// Evaluate the tag expression against a set of tags
     pub fn matches(&self, tags: &[String]) -> bool {
-        println!(
-            "Evaluating tag expression {:?} against tags {:?}",
-            self, tags
-        );
-        let result = self.evaluate(tags);
-        println!("Tag expression evaluation result: {}", result);
-        result
+        self.evaluate(tags)
     }
 
     pub fn evaluate(&self, tags: &[String]) -> bool {
         match self {
-            TagOperation::Tag(tag) => {
-                let has_tag = tags.contains(tag);
-                println!("  Checking tag '{}' in {:?}: {}", tag, tags, has_tag);
-                has_tag
-            }
-            TagOperation::And(left, right) => {
-                let left_result = left.evaluate(tags);
-                let right_result = right.evaluate(tags);
-                let result = left_result && right_result;
-                println!(
-                    "  AND operation: {} && {} = {}",
-                    left_result, right_result, result
-                );
-                result
-            }
-            TagOperation::Or(left, right) => {
-                let left_result = left.evaluate(tags);
-                let right_result = right.evaluate(tags);
-                let result = left_result || right_result;
-                println!(
-                    "  OR operation: {} || {} = {}",
-                    left_result, right_result, result
-                );
-                result
-            }
-            TagOperation::Not(inner) => {
-                let inner_result = inner.evaluate(tags);
-                let result = !inner_result;
-                println!("  NOT operation: !{} = {}", inner_result, result);
-                result
-            }
+            TagOperation::Tag(tag) => tags.contains(tag),
+            TagOperation::And(left, right) => left.evaluate(tags) && right.evaluate(tags),
+            TagOperation::Or(left, right) => left.evaluate(tags) || right.evaluate(tags),
+            TagOperation::Not(inner) => !inner.evaluate(tags),
         }
     }
 }
@@ -367,19 +333,12 @@ pub fn table_p<'src>() -> p!(Table) {
                 .repeated()
                 .collect::<String>()
                 .map(|line: String| {
-                    dbg!("Processing table line:", &line); // DEBUG: observe line parsing
-
                     // Handle escaped characters at line level BEFORE splitting on |
                     // Replace escaped sequences in specific order to avoid conflicts
                     let line_with_placeholders = line
                         .replace("\\\\", "\u{E000}") // Use private use area as temporary placeholder for \\
                         .replace("\\|", "\u{E001}") // Use private use area as temporary placeholder for \|
                         .replace("\\n", "\u{E002}"); // Use private use area as temporary placeholder for \n
-
-                    dbg!(
-                        "Line after placeholder replacement:",
-                        &line_with_placeholders
-                    ); // DEBUG
 
                     // Split into cells using unescaped | characters
                     let cells = line_with_placeholders
@@ -391,12 +350,10 @@ pub fn table_p<'src>() -> p!(Table) {
                                 .replace("\u{E000}", "\\") // Restore \\ -> \
                                 .replace("\u{E001}", "|") // Restore \| -> |
                                 .replace("\u{E002}", "\n"); // Restore \n -> newline
-                            dbg!("Cell processed:", trimmed, "->", &unescaped); // DEBUG: observe cell escaping
                             unescaped
                         })
                         .filter(|cell| !cell.is_empty())
                         .collect::<Vec<String>>();
-                    dbg!("Parsed cells:", &cells); // DEBUG: observe cell parsing
                     cells
                 }),
         )
@@ -409,16 +366,9 @@ pub fn table_p<'src>() -> p!(Table) {
                 .ignore_then(table_row.clone())
                 .repeated()
                 .collect::<Vec<Vec<String>>>()
-                .map(|rows| {
-                    dbg!("Total table rows collected:", rows.len()); // DEBUG: observe row count
-                    rows
-                }),
+                .map(|rows| rows),
         )
-        .map(|(header, rows)| {
-            let table = Table { header, rows };
-            dbg!("Final table:", &table); // DEBUG: observe final table structure
-            table
-        })
+        .map(|(header, rows)| Table { header, rows })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -610,41 +560,23 @@ fn step_p<'src>() -> p!(Spanned<Step>) {
                     // Try data table (lookahead: '|')
                     inline_whitespace()
                         .then(just('|').rewind())
-                        .ignore_then(table_p().map(|table| {
-                            dbg!("Found data table in step"); // DEBUG: table parsing
-                            (None, Some(table))
-                        }))
+                        .ignore_then(table_p().map(|table| (None, Some(table))))
                         // Or docstring (lookahead: '"""' or '```')
                         .or(inline_whitespace()
                             .then(just("\"\"\"").rewind().or(just("```").rewind()))
-                            .ignore_then(docstring_p().then_ignore(newline().or(end())).map(
-                                |ds| {
-                                    dbg!("Found docstring in step"); // DEBUG: docstring parsing
-                                    (Some(ds), None)
-                                },
-                            )))
+                            .ignore_then(
+                                docstring_p()
+                                    .then_ignore(newline().or(end()))
+                                    .map(|ds| (Some(ds), None)),
+                            ))
                         // Or just end the step (no arguments)
                         .or_not(),
                 )
-                .map(|(_, opt)| {
-                    let result = opt.unwrap_or((None, None));
-                    dbg!("Final step args:", &result); // DEBUG: final step args
-                    result
-                })
+                .map(|(_, opt)| opt.unwrap_or((None, None)))
                 // Allow steps at end of input without trailing newline
-                .or(end().map(|_| {
-                    dbg!("Step at end of input"); // DEBUG: end of input
-                    (None, None)
-                })),
+                .or(end().map(|_| (None, None))),
         )
         .map_with(|((verb, text_parts), (doc_string, data_table)), e| {
-            dbg!(
-                "Creating step:",
-                &verb,
-                &text_parts,
-                &doc_string.is_some(),
-                &data_table.is_some()
-            ); // DEBUG: step creation
             (
                 Step {
                     verb,
@@ -817,7 +749,6 @@ impl Document {
 }
 
 fn language_directive_p<'src>() -> p!(String) {
-    println!("Parsing language directive...");
     just("#")
         .ignore_then(
             any()
@@ -844,30 +775,19 @@ fn language_directive_p<'src>() -> p!(String) {
                 .collect::<String>(),
         )
         .then_ignore(newline())
-        .map(|lang| {
-            println!("Found language directive: {}", lang);
-            lang
-        })
+        .map(|lang| lang)
 }
 
 pub fn document_p<'src>() -> p!(Document) {
-    println!("Starting document parse...");
-
     // Optional language directive at the start
     let language_opt = language_directive_p()
         .then_ignore(any().filter(|c: &char| c.is_ascii_whitespace()).repeated())
         .or_not()
-        .map(|lang| {
-            dbg!("Language directive parsed:", &lang);
-            lang
-        });
+        .map(|lang| lang);
 
     language_opt
         .then(feature_p())
-        .map(|(language, feature)| {
-            dbg!("Creating document with language:", &language);
-            Document { language, feature }
-        })
+        .map(|(language, feature)| Document { language, feature })
         .then_ignore(end())
 }
 

@@ -48,9 +48,6 @@ impl IntegrationTestWorld {
         self.log_event(&format!("Set state: {} = {}", key, value));
     }
 
-    fn get_state(&self, key: &str) -> Option<String> {
-        self.state.get(key).cloned()
-    }
 }
 
 #[test]

@@ -1,6 +1,6 @@
 /// Reporter implementations for cucumber-gherkin
 ///
-/// Provides various output formats based on Oracle guidance:
+/// Provides various output formats:
 /// - Pretty: Human-readable nested output with colors and formatting
 /// - Progress: Dots/characters with failure summary
 /// - JUnit XML: CI-friendly XML format
@@ -10,7 +10,7 @@
 use crate::events::EventListener;
 /// Reporter implementations for cucumber-gherkin
 ///
-/// Provides various output formats based on Oracle guidance:
+/// Provides various output formats:
 /// - Pretty: Human-readable nested output with colors and formatting
 /// - Progress: Dots/characters with failure summary
 /// - JUnit XML: CI-friendly XML format
@@ -20,7 +20,7 @@ use crate::events::EventListener;
 use crate::events::HookStatus;
 /// Reporter implementations for cucumber-gherkin
 ///
-/// Provides various output formats based on Oracle guidance:
+/// Provides various output formats:
 /// - Pretty: Human-readable nested output with colors and formatting
 /// - Progress: Dots/characters with failure summary
 /// - JUnit XML: CI-friendly XML format
@@ -30,7 +30,7 @@ use crate::events::HookStatus;
 use crate::events::HookType;
 /// Reporter implementations for cucumber-gherkin
 ///
-/// Provides various output formats based on Oracle guidance:
+/// Provides various output formats:
 /// - Pretty: Human-readable nested output with colors and formatting
 /// - Progress: Dots/characters with failure summary
 /// - JUnit XML: CI-friendly XML format
@@ -438,7 +438,7 @@ impl<W: Write + Send + Sync> EventListener for PrettyReporter<W> {
                         HookType::Before => "Before hook",
                         HookType::After => "After hook",
                     };
-                    let _ = self.write_line(1, &format!("🎣 {} ({})", hook_name, hook_desc));
+                    let _ = self.write_line(1, &format!("Hook {} ({})", hook_name, hook_desc));
                 }
             }
 
@@ -1211,7 +1211,8 @@ mod tests {
             run_result,
         });
 
-        let output_str = String::from_utf8(reporter.writer).unwrap();
+        let output_str =
+            String::from_utf8(reporter.writer).unwrap_or_else(|e| format!("invalid utf8: {e}"));
         assert!(output_str.contains("Test run started"));
         assert!(output_str.contains("Test Results:"));
         assert!(output_str.contains("2 total, 1 passed, 1 failed"));
@@ -1283,7 +1284,8 @@ mod tests {
             scenario_result,
         });
 
-        let output_str = String::from_utf8(reporter.writer).unwrap();
+        let output_str =
+            String::from_utf8(reporter.writer).unwrap_or_else(|e| format!("invalid utf8: {e}"));
         assert!(output_str.contains("Feature: Test Feature"));
         assert!(output_str.contains("@smoke @fast"));
         assert!(output_str.contains("Scenario: Test Scenario"));
@@ -1419,8 +1421,8 @@ mod tests {
             run_result,
         });
 
-        let output_str = String::from_utf8(reporter.writer).unwrap();
-        dbg!("Progress reporter output: {}", &output_str);
+        let output_str =
+            String::from_utf8(reporter.writer).unwrap_or_else(|e| format!("invalid utf8: {e}"));
 
         assert!(output_str.contains("Starting cucumber-gherkin test run"));
         assert!(output_str.contains("Finished: 1 scenarios"));
@@ -1518,8 +1520,8 @@ mod tests {
             run_result,
         });
 
-        let output_str = String::from_utf8(reporter.writer).unwrap();
-        dbg!("Progress reporter failed output: {}", &output_str);
+        let output_str =
+            String::from_utf8(reporter.writer).unwrap_or_else(|e| format!("invalid utf8: {e}"));
 
         assert!(output_str.contains("0 passed, 1 failed"));
         assert!(output_str.contains("0.0% pass rate"));
@@ -1674,8 +1676,8 @@ mod tests {
             run_result,
         });
 
-        let output_str = String::from_utf8(reporter.writer).unwrap();
-        dbg!("JUnit successful output: {}", &output_str);
+        let output_str =
+            String::from_utf8(reporter.writer).unwrap_or_else(|e| format!("invalid utf8: {e}"));
 
         // Validate XML structure
         assert!(output_str.contains("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
@@ -1808,8 +1810,8 @@ mod tests {
             run_result,
         });
 
-        let output_str = String::from_utf8(reporter.writer).unwrap();
-        dbg!("JUnit failed output: {}", &output_str);
+        let output_str =
+            String::from_utf8(reporter.writer).unwrap_or_else(|e| format!("invalid utf8: {e}"));
 
         // Validate XML structure for failed test
         assert!(output_str.contains("tests=\"1\""));
@@ -1939,8 +1941,8 @@ mod tests {
             run_result,
         });
 
-        let output_str = String::from_utf8(reporter.writer).unwrap();
-        dbg!("JUnit outline output: {}", &output_str);
+        let output_str =
+            String::from_utf8(reporter.writer).unwrap_or_else(|e| format!("invalid utf8: {e}"));
 
         // Validate Scenario Outline formatting
         assert!(output_str.contains("<testcase name=\"Outline Scenario [Example 2]\""));
@@ -1997,8 +1999,8 @@ mod tests {
             run_result: run_result.clone(),
         });
 
-        let output_str = String::from_utf8(reporter.writer).unwrap();
-        dbg!("JSON final result output: {}", &output_str);
+        let output_str =
+            String::from_utf8(reporter.writer).unwrap_or_else(|e| format!("invalid utf8: {e}"));
 
         // Should be valid JSON
         let parsed_result: serde_json::Value =
@@ -2060,8 +2062,8 @@ mod tests {
             run_result,
         });
 
-        let output_str = String::from_utf8(reporter.writer).unwrap();
-        dbg!("JSON streaming output: {}", &output_str);
+        let output_str =
+            String::from_utf8(reporter.writer).unwrap_or_else(|e| format!("invalid utf8: {e}"));
 
         // Should contain multiple JSON lines (NDJSON)
         let lines: Vec<&str> = output_str.lines().collect();
